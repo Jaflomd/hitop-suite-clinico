@@ -1,0 +1,187 @@
+{
+  "id": "hitop-core-short-demo",
+  "nombre": "HiTOP Core Short Demo",
+  "descripcion": "Una experiencia breve para conversar sobre perfiles dimensionales en consulta. Esta demo prioriza claridad y tono humano.",
+  "tiempo_estimado": "4 a 6 minutos",
+  "nota_clinica": "Esto no reemplaza una consulta. Es una guía breve para ordenar señales y llevarlas a conversación clínica.",
+  "spectra": [
+    "Internalizing",
+    "Detachment",
+    "Thought Disorder",
+    "Disinhibition",
+    "Antagonism",
+    "Somatoform"
+  ],
+  "future_modules": [
+    "Seguimiento longitudinal",
+    "Batería larga por dominios",
+    "Reporte clínico ampliado"
+  ],
+  "scale": [
+    {
+      "value": 0,
+      "label": "Nada",
+      "hint": "No se parece a mí ahora"
+    },
+    {
+      "value": 1,
+      "label": "Un poco",
+      "hint": "Aparece rara vez"
+    },
+    {
+      "value": 2,
+      "label": "A ratos",
+      "hint": "Se nota algunos días"
+    },
+    {
+      "value": 3,
+      "label": "Bastante",
+      "hint": "Está presente con frecuencia"
+    },
+    {
+      "value": 4,
+      "label": "Mucho",
+      "hint": "Se siente muy presente"
+    }
+  ],
+  "items": [
+    {
+      "id": "q1",
+      "texto_es": "En los últimos 14 días me ha costado bajar un estado de preocupación o tensión interna.",
+      "constructo_objetivo": "internalizing",
+      "facet_targets": ["alerta ansiosa"],
+      "syndrome_targets": ["tensión ansiosa"],
+      "spectrum_targets": ["internalizing"],
+      "optional": false
+    },
+    {
+      "id": "q2",
+      "texto_es": "En los últimos 14 días he sentido poco interés o poca energía para disfrutar lo cotidiano.",
+      "constructo_objetivo": "internalizing",
+      "facet_targets": ["anhedonia cotidiana"],
+      "syndrome_targets": ["ánimo bajo y desconexión emocional"],
+      "spectrum_targets": ["internalizing"],
+      "optional": false
+    },
+    {
+      "id": "q3",
+      "texto_es": "Me ha salido más natural apartarme de la gente, incluso cuando podría acercarme.",
+      "constructo_objetivo": "detachment",
+      "facet_targets": ["retiro interpersonal"],
+      "syndrome_targets": ["retirada interpersonal"],
+      "spectrum_targets": ["detachment"],
+      "optional": false
+    },
+    {
+      "id": "q4",
+      "texto_es": "He sentido poco deseo de participar emocionalmente en vínculos o conversaciones cercanas.",
+      "constructo_objetivo": "detachment",
+      "facet_targets": ["aplanamiento afiliativo"],
+      "syndrome_targets": ["distancia afectiva"],
+      "spectrum_targets": ["detachment"],
+      "optional": false
+    },
+    {
+      "id": "q5",
+      "texto_es": "A veces mis percepciones o ideas se sienten extrañas, difíciles de explicar o poco habituales para mí.",
+      "constructo_objetivo": "thought_disorder",
+      "facet_targets": ["experiencia perceptiva inusual"],
+      "syndrome_targets": ["experiencias inusuales"],
+      "spectrum_targets": ["thought_disorder"],
+      "optional": false
+    },
+    {
+      "id": "q6",
+      "texto_es": "Me ha costado mantener un hilo claro de pensamiento cuando estoy bajo presión o muy activado/a.",
+      "constructo_objetivo": "thought_disorder",
+      "facet_targets": ["desorganización cognitiva leve"],
+      "syndrome_targets": ["pensamiento desordenado bajo estrés"],
+      "spectrum_targets": ["thought_disorder"],
+      "optional": false
+    },
+    {
+      "id": "q7",
+      "texto_es": "He actuado por impulso y recién después he pensado en las consecuencias.",
+      "constructo_objetivo": "disinhibition",
+      "facet_targets": ["impulsividad reactiva"],
+      "syndrome_targets": ["impulsividad situacional"],
+      "spectrum_targets": ["disinhibition"],
+      "optional": false
+    },
+    {
+      "id": "q8",
+      "texto_es": "Me ha costado sostener rutinas, terminar tareas o mantenerme en foco cuando algo me frustra.",
+      "constructo_objetivo": "disinhibition",
+      "facet_targets": ["desorganización conductual"],
+      "syndrome_targets": ["desregulación de hábitos y foco"],
+      "spectrum_targets": ["disinhibition"],
+      "optional": false
+    },
+    {
+      "id": "q9",
+      "texto_es": "He estado más irritable o en modo de choque con otras personas de lo que me gustaría.",
+      "constructo_objetivo": "antagonism",
+      "facet_targets": ["fricción interpersonal"],
+      "syndrome_targets": ["fricción interpersonal"],
+      "spectrum_targets": ["antagonism"],
+      "optional": false
+    },
+    {
+      "id": "q10",
+      "texto_es": "Me he sentido especialmente desconfiado/a o rápido/a para interpretar daño, crítica o mala intención.",
+      "constructo_objetivo": "antagonism",
+      "facet_targets": ["hipervigilancia interpersonal"],
+      "syndrome_targets": ["desconfianza dominante"],
+      "spectrum_targets": ["antagonism"],
+      "optional": false
+    },
+    {
+      "id": "q11",
+      "texto_es": "He notado molestias físicas que ocupan mucha atención mental, aunque no siempre sé cómo explicarlas.",
+      "constructo_objetivo": "somatoform",
+      "facet_targets": ["saliencia corporal"],
+      "syndrome_targets": ["malestar corporal persistente"],
+      "spectrum_targets": ["somatoform"],
+      "optional": false
+    },
+    {
+      "id": "q12",
+      "texto_es": "Durante estos días me ha resultado difícil dejar de revisar sensaciones del cuerpo o pensar que algo no anda bien.",
+      "constructo_objetivo": "somatoform",
+      "facet_targets": ["preocupación somática"],
+      "syndrome_targets": ["hipervigilancia somática"],
+      "spectrum_targets": ["somatoform"],
+      "optional": false
+    },
+    {
+      "id": "gate-substance",
+      "texto_es": "En este mismo periodo, ¿has usado alcohol, marihuana u otra sustancia para apagar, soltar o cambiar lo que estabas sintiendo?",
+      "constructo_objetivo": "substance_gate",
+      "facet_targets": [],
+      "syndrome_targets": [],
+      "spectrum_targets": [],
+      "optional": false,
+      "gate": true,
+      "reveals": ["q13", "q14"],
+      "threshold": 2
+    },
+    {
+      "id": "q13",
+      "texto_es": "Cuando recurro a alguna sustancia, siento que es una forma de regularme o soportar mejor el momento.",
+      "constructo_objetivo": "substance_use",
+      "facet_targets": ["uso regulatorio"],
+      "syndrome_targets": ["uso compensatorio de sustancias"],
+      "spectrum_targets": ["substance_use"],
+      "optional": true
+    },
+    {
+      "id": "q14",
+      "texto_es": "Después de usar alguna sustancia, me cuesta más recuperar claridad, ritmo o bienestar.",
+      "constructo_objetivo": "substance_use",
+      "facet_targets": ["costo funcional posterior"],
+      "syndrome_targets": ["costo posterior del uso"],
+      "spectrum_targets": ["substance_use"],
+      "optional": true
+    }
+  ]
+}

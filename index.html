@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>HiTOP Suite Clinico</title>
+    <meta
+      name="description"
+      content="Suite local de 40 instrumentos para cribado clinico dimensional con reporte de puntajes y lectura HiTOP."
+    />
+    <meta name="theme-color" content="#100d0a" />
+    <link rel="icon" href="./favicon.svg" type="image/svg+xml" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="ambient ambient-left" aria-hidden="true"></div>
+    <div class="ambient ambient-right" aria-hidden="true"></div>
+    <main class="app-shell">
+      <section class="app-frame">
+        <header class="topbar">
+          <div class="brand-lockup">
+            <span class="brand-mark">HS</span>
+            <div>
+              <p class="eyebrow">Clinical Brain OS · Local Suite</p>
+              <h1>HiTOP Suite</h1>
+            </div>
+          </div>
+          <button id="reset-app" class="ghost-button" type="button" hidden>
+            Reiniciar
+          </button>
+        </header>
+
+        <div class="progress-wrap" aria-live="polite">
+          <div class="progress-track">
+            <div id="progress-bar" class="progress-bar"></div>
+          </div>
+          <p id="progress-label" class="progress-label">Preparando experiencia...</p>
+        </div>
+
+        <section id="app-root" class="screen-root" aria-live="polite"></section>
+      </section>
+    </main>
+
+    <template id="pill-template">
+      <span class="pill"></span>
+    </template>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
