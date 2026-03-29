@@ -1,6 +1,8 @@
-# HiTOP Suite Clinico
+# Psiquiatria basada en medicion
 
 Suite local-first de 40 instrumentos de cribado y severidad psicopatologica, pensada para uso clinico exploratorio en una sola shell web.
+
+Esta es la version simple: no guarda pacientes, no pide PIN y no recolecta historia local. Solo aplica instrumentos y entrega reportes.
 
 ## Lo que hace
 

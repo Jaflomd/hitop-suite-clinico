@@ -69,7 +69,7 @@ function render() {
 function syncProgress() {
   if (state.screen === "catalog") {
     progressBar.style.width = "0%";
-    progressLabel.textContent = "Selecciona un instrumento del catalogo HiTOP Suite.";
+    progressLabel.textContent = "Selecciona un instrumento del catalogo de psiquiatria basada en medicion.";
     return;
   }
 
@@ -103,8 +103,8 @@ function renderCatalog() {
   screen.innerHTML = `
     <div class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">Clinical Brain OS · HiTOP Suite</p>
-        <h2>40 instrumentos, una sola shell clínica y reporte dimensional.</h2>
+        <p class="eyebrow">Clinical Brain OS · Suite local</p>
+        <h2>Psiquiatria basada en medicion con 40 instrumentos y reporte dimensional.</h2>
         <p class="lede">
           El paquete organiza cribados, escalas de severidad y módulos de funcionamiento para cubrir
           grandes dimensiones de psicopatología. Todo corre localmente y cada instrumento termina en
@@ -631,13 +631,28 @@ function parseTableMarkdown(markdown) {
     const options = [];
     for (let index = 1; index < cells.length; index += 1) {
       const rawCell = cells[index];
-      if (!rawCell || rawCell === "[ ]") {
+      if (!rawCell || isSelectionMarkerCell(rawCell)) {
         continue;
       }
       const headerLabel = cleanMarkdown(headerCells?.[index] || "");
-      const numericMatch = rawCell.match(/(\d+)/g);
-      const value = numericMatch ? Number(numericMatch[numericMatch.length - 1]) : index - 1;
-      const label = /^\d+$/.test(rawCell) ? headerLabel : rawCell.replace(/\(\d+\)/g, "").trim();
+      const headerValue = extractLastNumber(headerLabel);
+      const rawValue = extractLastNumber(rawCell);
+      const rawLooksNumeric = /^[+-]?\d+([.,]\d+)?$/.test(rawCell);
+      const headerLooksNumeric = /^[+-]?\d+([.,]\d+)?$/.test(headerLabel);
+
+      let value = index - 1;
+      let label = rawCell.replace(/\(\d+\)/g, "").trim();
+
+      if (rawLooksNumeric) {
+        value = rawValue ?? index - 1;
+        label = headerLabel;
+      } else if (headerLooksNumeric) {
+        value = rawValue ?? headerValue ?? index - 1;
+      } else if (rawValue !== null && headerLabel) {
+        value = rawValue;
+        label = headerLabel;
+      }
+
       options.push(makeOption(value, label));
     }
 
@@ -668,6 +683,19 @@ function parseNumberedMarkdown(markdown) {
 
 function cleanMarkdown(text) {
   return text.replace(/\*\*/g, "").replace(/`/g, "").trim();
+}
+
+function isSelectionMarkerCell(text) {
+  return /^\[\s*[xX]?\s*\]\*?$/.test(text.trim());
+}
+
+function extractLastNumber(text) {
+  const matches = text.match(/-?\d+(?:[.,]\d+)?/g);
+  if (!matches?.length) {
+    return null;
+  }
+
+  return Number(matches[matches.length - 1].replace(",", "."));
 }
 
 function stripLeadingNumber(text) {
