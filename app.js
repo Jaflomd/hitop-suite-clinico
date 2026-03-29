@@ -1,154 +1,54 @@
 import { CATEGORY_ORDER, INSTRUMENTS, RESPONSE_SETS } from "./data/catalog.js";
-import { buildReport, buildSummaryText, buildTableText, formatNumber } from "./reporting.js";
-import {
-  DEFAULT_AUTO_LOCK_MS,
-  createVault,
-  deletePatientAndSessions,
-  deleteSession,
-  findInProgressSession,
-  getSecurityRecord,
-  getSession,
-  listPatients,
-  listSessionsForPatient,
-  resetVault,
-  savePatient,
-  saveSession,
-  unlockVault,
-} from "./storage.js";
+import { FACETS as PID5_FACETS } from "./data/pid5-data.js";
 
 const root = document.getElementById("app-root");
 const progressBar = document.getElementById("progress-bar");
 const progressLabel = document.getElementById("progress-label");
-const topbarButton = document.getElementById("reset-app");
+const resetButton = document.getElementById("reset-app");
 
 const itemCache = new Map();
 
 const state = {
-  screen: "boot",
-  loading: true,
-  loadingMessage: "Abriendo suite local...",
-  error: "",
-  notice: "",
-  security: null,
+  screen: "catalog",
   search: "",
   category: "all",
-  patientSearch: "",
-  patientDraft: createEmptyPatientDraft(),
-  patientFormMode: "create",
-  patients: [],
-  patientSessions: [],
-  selectedPatientId: null,
   instrument: null,
   items: [],
   responses: {},
   currentIndex: 0,
+  loading: false,
+  error: "",
+  copyFeedback: "",
   tableSorts: {},
-  currentSession: null,
 };
 
-let vaultKey = null;
-let autoLockTimer = null;
 let advanceTimer = null;
-let persistQueue = Promise.resolve();
-let lastActivityTick = 0;
-let activityBound = false;
 
-void init();
+init();
 
-async function init() {
-  topbarButton.addEventListener("click", () => {
-    void lockApp("manual");
-  });
-  bindActivityListeners();
-  await bootstrap();
-}
-
-async function bootstrap() {
-  state.loading = true;
-  state.loadingMessage = "Abriendo suite local...";
+function init() {
+  resetButton.addEventListener("click", resetToCatalog);
   render();
-
-  try {
-    state.security = await getSecurityRecord();
-    state.screen = state.security ? "unlock" : "setup-pin";
-  } catch (error) {
-    console.error("Bootstrap failed", error);
-    state.error = "No pude abrir la base local en este navegador.";
-    state.screen = "setup-pin";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-function bindActivityListeners() {
-  if (activityBound) {
-    return;
-  }
-
-  const events = ["mousedown", "keydown", "touchstart", "pointerdown"];
-  events.forEach((eventName) => {
-    window.addEventListener(eventName, markActivity, { passive: true });
-  });
-
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      markActivity();
-    }
-  });
-
-  activityBound = true;
-}
-
-function markActivity() {
-  if (!vaultKey) {
-    return;
-  }
-
-  const now = Date.now();
-  if (now - lastActivityTick < 3000) {
-    return;
-  }
-
-  lastActivityTick = now;
-  scheduleAutoLock();
-}
-
-function scheduleAutoLock() {
-  window.clearTimeout(autoLockTimer);
-  if (!vaultKey) {
-    return;
-  }
-
-  const timeout = state.security?.settings?.autoLockMs || DEFAULT_AUTO_LOCK_MS;
-  autoLockTimer = window.setTimeout(() => {
-    void lockApp("inactivity");
-  }, timeout);
 }
 
 function render() {
-  configureTopbar();
   syncProgress();
+  resetButton.hidden = state.screen === "catalog" || state.loading;
   root.innerHTML = "";
 
   if (state.loading) {
-    renderLoading();
+    root.innerHTML = `
+      <section class="screen">
+        <div class="result-card">
+          <p class="section-label">Cargando instrumento</p>
+          <p class="summary-text">Preparando aplicacion, instrucciones y scoring...</p>
+        </div>
+      </section>
+    `;
     return;
   }
 
   switch (state.screen) {
-    case "setup-pin":
-      renderSetupPin();
-      break;
-    case "unlock":
-      renderUnlock();
-      break;
-    case "patients":
-      renderPatients();
-      break;
-    case "patient-detail":
-      renderPatientDetail();
-      break;
     case "catalog":
       renderCatalog();
       break;
@@ -162,51 +62,14 @@ function render() {
       renderResults();
       break;
     default:
-      renderLoading();
+      renderCatalog();
   }
-}
-
-function configureTopbar() {
-  const showLock = Boolean(vaultKey) && !state.loading && !["setup-pin", "unlock"].includes(state.screen);
-  topbarButton.hidden = !showLock;
-  topbarButton.textContent = "Bloquear";
 }
 
 function syncProgress() {
-  if (state.loading) {
-    progressBar.style.width = "8%";
-    progressLabel.textContent = state.loadingMessage;
-    return;
-  }
-
-  if (state.screen === "setup-pin") {
-    progressBar.style.width = "0%";
-    progressLabel.textContent = "Configura un PIN local para activar la boveda.";
-    return;
-  }
-
-  if (state.screen === "unlock") {
-    progressBar.style.width = "0%";
-    progressLabel.textContent = "Desbloquea la suite local para acceder a pacientes.";
-    return;
-  }
-
-  if (state.screen === "patients") {
-    progressBar.style.width = "0%";
-    progressLabel.textContent = "Gestiona pacientes guardados solo en este dispositivo.";
-    return;
-  }
-
-  if (state.screen === "patient-detail") {
-    const patient = getSelectedPatient();
-    progressBar.style.width = "0%";
-    progressLabel.textContent = patient ? `${patient.fullName} · historial local` : "Perfil de paciente";
-    return;
-  }
-
   if (state.screen === "catalog") {
-    progressBar.style.width = "4%";
-    progressLabel.textContent = "Selecciona un instrumento para el paciente activo.";
+    progressBar.style.width = "0%";
+    progressLabel.textContent = "Selecciona un instrumento del catalogo HiTOP Suite.";
     return;
   }
 
@@ -233,386 +96,36 @@ function syncProgress() {
   progressLabel.textContent = `${state.instrument.shortName} · reporte listo.`;
 }
 
-function renderLoading() {
-  root.innerHTML = `
-    <section class="screen">
-      <div class="result-card">
-        <p class="section-label">Cargando suite</p>
-        <p class="summary-text">${escapeHtml(state.loadingMessage)}</p>
-      </div>
-    </section>
-  `;
-}
-
-function renderSetupPin() {
-  const screen = document.createElement("section");
-  screen.className = "screen screen-grid screen-grid--hero";
-  screen.innerHTML = `
-    <div class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Boveda local</p>
-        <h2>Configura un PIN para proteger pacientes y evaluaciones.</h2>
-        <p class="lede">
-          La suite guardara ficha minima del paciente, respuestas crudas, puntajes y reportes
-          solo en este dispositivo. Todo queda cifrado localmente.
-        </p>
-      </div>
-      ${renderMessageBlock()}
-      <div class="info-row">
-        <article class="metric-card">
-          <p class="metric-label">Persistencia</p>
-          <p class="metric-value">IndexedDB local</p>
-        </article>
-        <article class="metric-card">
-          <p class="metric-label">Seguridad</p>
-          <p class="metric-value">PIN + AES-GCM</p>
-        </article>
-        <article class="metric-card">
-          <p class="metric-label">Autobloqueo</p>
-          <p class="metric-value">10 minutos</p>
-        </article>
-      </div>
-    </div>
-
-    <aside class="hero">
-      <article class="auth-card">
-        <p class="section-label">Crear boveda</p>
-        <form id="setup-pin-form" class="auth-form">
-          <label class="field-group">
-            <span class="section-label">PIN local</span>
-            <input class="text-input pin-input" type="password" inputmode="numeric" autocomplete="new-password" name="pin" minlength="4" placeholder="Minimo 4 digitos" required />
-          </label>
-          <label class="field-group">
-            <span class="section-label">Confirmar PIN</span>
-            <input class="text-input pin-input" type="password" inputmode="numeric" autocomplete="new-password" name="confirmPin" minlength="4" placeholder="Repite el PIN" required />
-          </label>
-          <button class="primary-button" type="submit">Crear y desbloquear</button>
-        </form>
-        <p class="footer-note">Si pierdes el PIN, la unica salida del MVP es resetear la base local completa.</p>
-      </article>
-    </aside>
-  `;
-
-  root.appendChild(screen);
-
-  screen.querySelector("#setup-pin-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    void handleCreateVault(String(form.get("pin") || ""), String(form.get("confirmPin") || ""));
-  });
-}
-
-function renderUnlock() {
-  const screen = document.createElement("section");
-  screen.className = "screen screen-grid screen-grid--hero";
-  screen.innerHTML = `
-    <div class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Boveda local</p>
-        <h2>Desbloquea Psiquiatria basada en medicion.</h2>
-        <p class="lede">
-          Introduce el PIN local para acceder a pacientes, sesiones guardadas y reportes
-          dimensionales en este dispositivo.
-        </p>
-      </div>
-      ${renderMessageBlock()}
-      <article class="soft-panel">
-        <p class="section-label">Recordatorio</p>
-        <p>La suite no sincroniza con nube en esta fase. Todo lo guardado vive y se protege localmente.</p>
-      </article>
-    </div>
-
-    <aside class="hero">
-      <article class="auth-card">
-        <p class="section-label">Desbloquear</p>
-        <form id="unlock-form" class="auth-form">
-          <label class="field-group">
-            <span class="section-label">PIN local</span>
-            <input class="text-input pin-input" type="password" inputmode="numeric" autocomplete="current-password" name="pin" minlength="4" placeholder="PIN" required />
-          </label>
-          <button class="primary-button" type="submit">Entrar</button>
-        </form>
-        <button class="danger-button" type="button" data-action="reset-vault">Reset local completo</button>
-        <p class="footer-note">Reset elimina pacientes, sesiones y configuracion de seguridad de este navegador.</p>
-      </article>
-    </aside>
-  `;
-
-  root.appendChild(screen);
-
-  screen.querySelector("#unlock-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    const form = new FormData(event.currentTarget);
-    void handleUnlock(String(form.get("pin") || ""));
-  });
-
-  bindAction(screen, "[data-action='reset-vault']", () => {
-    void confirmAndResetVault();
-  });
-}
-
-function renderPatients() {
-  const visiblePatients = getFilteredPatients();
-  const screen = document.createElement("section");
-  screen.className = "screen screen-grid screen-grid--hero";
-  screen.innerHTML = `
-    <div class="hero">
-      <div class="hero-copy">
-        <p class="eyebrow">Pacientes locales</p>
-        <h2>Gestiona la ficha clinica minima y el historial dimensional.</h2>
-        <p class="lede">
-          Crea, edita y abre pacientes guardados en este dispositivo. Cada paciente puede acumular
-          multiples instrumentos, sesiones en curso y reportes finales.
-        </p>
-      </div>
-
-      <div class="info-row">
-        <article class="metric-card">
-          <p class="metric-label">Pacientes</p>
-          <p class="metric-value">${state.patients.length}</p>
-        </article>
-        <article class="metric-card">
-          <p class="metric-label">Visible</p>
-          <p class="metric-value">${visiblePatients.length}</p>
-        </article>
-        <article class="metric-card">
-          <p class="metric-label">Sesion</p>
-          <p class="metric-value">Desbloqueada</p>
-        </article>
-      </div>
-
-      ${renderMessageBlock()}
-
-      <div class="soft-panel catalog-toolbar">
-        <label class="field-group">
-          <span class="section-label">Buscar paciente</span>
-          <input id="patient-search" class="text-input" type="text" value="${escapeHtml(state.patientSearch)}" placeholder="Nombre, HC o ID..." />
-        </label>
-      </div>
-
-      <div class="patient-list">
-        ${
-          visiblePatients.length
-            ? visiblePatients.map((patient) => renderPatientCard(patient)).join("")
-            : `
-              <article class="empty-state">
-                <p class="section-label">Sin resultados</p>
-                <p class="summary-text">Todavia no hay pacientes guardados o el filtro no encontro coincidencias.</p>
-              </article>
-            `
-        }
-      </div>
-    </div>
-
-    <aside class="hero">
-      <article class="auth-card">
-        <p class="section-label">${state.patientFormMode === "edit" ? "Editar paciente" : "Nuevo paciente"}</p>
-        <form id="patient-form" class="patient-form">
-          <div class="field-grid">
-            <label class="field-group">
-              <span class="section-label">Nombre completo</span>
-              <input class="text-input" type="text" name="fullName" value="${escapeHtml(state.patientDraft.fullName)}" placeholder="Nombre y apellidos" required />
-            </label>
-            <label class="field-group">
-              <span class="section-label">Historia clinica / ID</span>
-              <input class="text-input" type="text" name="recordNumber" value="${escapeHtml(state.patientDraft.recordNumber)}" placeholder="HC-001" required />
-            </label>
-            <label class="field-group">
-              <span class="section-label">Fecha de nacimiento</span>
-              <input class="text-input" type="date" name="dateOfBirth" value="${escapeHtml(state.patientDraft.dateOfBirth)}" required />
-            </label>
-            <label class="field-group">
-              <span class="section-label">Sexo</span>
-              <select class="select-input" name="sex" required>
-                ${renderSexOptions(state.patientDraft.sex)}
-              </select>
-            </label>
-          </div>
-
-          <label class="field-group">
-            <span class="section-label">Observaciones breves</span>
-            <textarea class="textarea-input" name="notes" rows="4" placeholder="Notas clinicas breves, contexto o advertencias.">${escapeHtml(state.patientDraft.notes)}</textarea>
-          </label>
-
-          <div class="cta-row">
-            <button class="primary-button" type="submit">${state.patientFormMode === "edit" ? "Guardar cambios" : "Crear paciente"}</button>
-            <button class="secondary-button" type="button" data-action="reset-patient-form">Limpiar</button>
-          </div>
-        </form>
-      </article>
-    </aside>
-  `;
-
-  root.appendChild(screen);
-
-  screen.querySelector("#patient-search").addEventListener("input", (event) => {
-    state.patientSearch = event.target.value;
-    render();
-  });
-
-  screen.querySelector("#patient-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    void savePatientFromForm(event.currentTarget);
-  });
-
-  bindAction(screen, "[data-action='reset-patient-form']", resetPatientDraft);
-
-  screen.querySelectorAll("[data-open-patient]").forEach((button) => {
-    button.addEventListener("click", () => {
-      void openPatient(button.dataset.openPatient);
-    });
-  });
-
-  screen.querySelectorAll("[data-edit-patient]").forEach((button) => {
-    button.addEventListener("click", () => {
-      loadDraftForPatient(button.dataset.editPatient);
-      render();
-    });
-  });
-
-  screen.querySelectorAll("[data-delete-patient]").forEach((button) => {
-    button.addEventListener("click", () => {
-      void handleDeletePatient(button.dataset.deletePatient);
-    });
-  });
-}
-
-function renderPatientDetail() {
-  const patient = getSelectedPatient();
-  if (!patient) {
-    state.screen = "patients";
-    render();
-    return;
-  }
-
-  const completedCount = state.patientSessions.filter((session) => session.status === "completed").length;
-  const inProgressCount = state.patientSessions.filter((session) => session.status === "in_progress").length;
-
-  const screen = document.createElement("section");
-  screen.className = "screen";
-  screen.innerHTML = `
-    <div class="detail-grid">
-      <div class="hero">
-        <div class="hero-copy">
-          <p class="eyebrow">Perfil del paciente</p>
-          <h2>${escapeHtml(patient.fullName)}</h2>
-          <p class="lede">Ficha minima local y trazado longitudinal de evaluaciones guardadas.</p>
-        </div>
-
-        <div class="patient-summary-grid">
-          <article class="result-card">
-            <p class="section-label">Historia clinica / ID</p>
-            <p class="summary-value">${escapeHtml(patient.recordNumber)}</p>
-          </article>
-          <article class="result-card">
-            <p class="section-label">Fecha de nacimiento</p>
-            <p class="summary-value">${escapeHtml(formatDate(patient.dateOfBirth))}</p>
-          </article>
-          <article class="result-card">
-            <p class="section-label">Sexo</p>
-            <p class="summary-value">${escapeHtml(patient.sex)}</p>
-          </article>
-          <article class="result-card">
-            <p class="section-label">Observaciones</p>
-            <p class="summary-text">${escapeHtml(patient.notes || "Sin observaciones.")}</p>
-          </article>
-        </div>
-
-        ${renderMessageBlock()}
-
-        <div class="cta-row">
-          <button class="primary-button" type="button" data-action="new-assessment">Nueva evaluacion</button>
-          <button class="secondary-button" type="button" data-action="edit-patient-detail">Editar ficha</button>
-          <button class="ghost-button" type="button" data-action="patients-list">Volver a pacientes</button>
-        </div>
-      </div>
-
-      <aside class="hero">
-        <div class="info-row patient-stats">
-          <article class="metric-card">
-            <p class="metric-label">Total sesiones</p>
-            <p class="metric-value">${state.patientSessions.length}</p>
-          </article>
-          <article class="metric-card">
-            <p class="metric-label">Completadas</p>
-            <p class="metric-value">${completedCount}</p>
-          </article>
-          <article class="metric-card">
-            <p class="metric-label">En curso</p>
-            <p class="metric-value">${inProgressCount}</p>
-          </article>
-        </div>
-      </aside>
-    </div>
-
-    <div class="history-list">
-      ${
-        state.patientSessions.length
-          ? state.patientSessions.map((session) => renderSessionCard(session)).join("")
-          : `
-            <article class="empty-state">
-              <p class="section-label">Sin evaluaciones</p>
-              <p class="summary-text">Este paciente aun no tiene instrumentos guardados. Puedes iniciar uno desde "Nueva evaluacion".</p>
-            </article>
-          `
-      }
-    </div>
-  `;
-
-  root.appendChild(screen);
-
-  bindAction(screen, "[data-action='new-assessment']", () => {
-    goToCatalog();
-  });
-  bindAction(screen, "[data-action='edit-patient-detail']", () => {
-    loadDraftForPatient(patient.id);
-    state.screen = "patients";
-    render();
-  });
-  bindAction(screen, "[data-action='patients-list']", goToPatients);
-
-  screen.querySelectorAll("[data-open-session]").forEach((button) => {
-    button.addEventListener("click", () => {
-      void openStoredSession(button.dataset.openSession);
-    });
-  });
-
-  screen.querySelectorAll("[data-delete-session]").forEach((button) => {
-    button.addEventListener("click", () => {
-      void handleDeleteSession(button.dataset.deleteSession);
-    });
-  });
-}
-
 function renderCatalog() {
-  const patient = getSelectedPatient();
-  if (!patient) {
-    state.screen = "patients";
-    render();
-    return;
-  }
-
   const visible = getFilteredInstruments();
   const screen = document.createElement("section");
   screen.className = "screen screen-grid screen-grid--hero";
   screen.innerHTML = `
     <div class="hero">
       <div class="hero-copy">
-        <p class="eyebrow">Catalogo para ${escapeHtml(patient.fullName)}</p>
-        <h2>Selecciona un instrumento y guardalo en el historial local.</h2>
+        <p class="eyebrow">Clinical Brain OS · HiTOP Suite</p>
+        <h2>40 instrumentos, una sola shell clínica y reporte dimensional.</h2>
         <p class="lede">
-          Cada aplicacion queda asociada al paciente activo con respuestas, puntajes,
-          dimensiones y reporte final cifrados en este dispositivo.
+          El paquete organiza cribados, escalas de severidad y módulos de funcionamiento para cubrir
+          grandes dimensiones de psicopatología. Todo corre localmente y cada instrumento termina en
+          un resumen claro con puntajes completos y lectura dimensional.
         </p>
       </div>
 
-      <article class="result-card">
-        <p class="section-label">Paciente activo</p>
-        <p class="summary-value">${escapeHtml(patient.fullName)}</p>
-        <p class="summary-text">${escapeHtml(patient.recordNumber)} · ${escapeHtml(formatDate(patient.dateOfBirth))} · ${escapeHtml(patient.sex)}</p>
-      </article>
-
-      ${renderMessageBlock()}
+      <div class="info-row">
+        <article class="metric-card">
+          <p class="metric-label">Catalogo activo</p>
+          <p class="metric-value">${INSTRUMENTS.length} instrumentos</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-label">Formato</p>
+          <p class="metric-value">1 pregunta por pantalla</p>
+        </article>
+        <article class="metric-card">
+          <p class="metric-label">Salida</p>
+          <p class="metric-value">Puntajes + dimensiones</p>
+        </article>
+      </div>
 
       <div class="soft-panel catalog-toolbar">
         <label class="field-group">
@@ -631,10 +144,6 @@ function renderCatalog() {
         </div>
       </div>
 
-      <div class="cta-row">
-        <button class="ghost-button" type="button" data-action="patient-detail">Volver al paciente</button>
-      </div>
-
       ${state.error ? `<div class="soft-panel danger-panel">${escapeHtml(state.error)}</div>` : ""}
     </div>
 
@@ -643,10 +152,10 @@ function renderCatalog() {
         <div class="card-header">
           <div class="card-copy">
             <p class="card-label">Cobertura visible</p>
-            <h3>${visible.length} instrumentos</h3>
-            <p>Elige una escala nueva o reanuda una sesion en curso si existe para ese instrumento.</p>
+            <h3>${visible.length} instrumentos en pantalla</h3>
+            <p>Filtra por categoria o busca por nombre, tags y dominios de cobertura.</p>
           </div>
-          <span class="inline-status">Autosave local</span>
+          <span class="inline-status">Local-first</span>
         </div>
       </article>
 
@@ -695,15 +204,9 @@ function renderCatalog() {
       void chooseInstrument(button.dataset.instrumentId);
     });
   });
-
-  bindAction(screen, "[data-action='patient-detail']", () => {
-    state.screen = "patient-detail";
-    render();
-  });
 }
 
 function renderIntro() {
-  const patient = getSelectedPatient();
   const instrument = state.instrument;
   const screen = document.createElement("section");
   screen.className = "screen screen-grid screen-grid--hero";
@@ -714,7 +217,6 @@ function renderIntro() {
         <h2>${escapeHtml(instrument.name)}</h2>
         <p class="lede">${escapeHtml(instrument.description)}</p>
       </div>
-
       <article class="battery-card">
         <div class="card-header">
           <div class="card-copy">
@@ -728,38 +230,35 @@ function renderIntro() {
           ${instrument.coverage.map((tag) => `<span class="pill">${escapeHtml(formatCoverage(tag))}</span>`).join("")}
         </div>
       </article>
-
-      ${renderMessageBlock()}
-
       <div class="cta-row">
         <button class="primary-button" data-action="begin" type="button">Empezar</button>
         <button class="secondary-button" data-action="back" type="button">Volver al catalogo</button>
       </div>
     </div>
-
     <aside class="hero">
       <article class="soft-panel">
-        <p class="section-label">Paciente activo</p>
-        <p class="summary-value">${escapeHtml(patient?.fullName || "")}</p>
-        <p class="summary-text">${escapeHtml(patient?.recordNumber || "")}</p>
+        <p class="section-label">Modo de uso</p>
+        <p>Responde en el dispositivo actual. El resultado queda solo en esta sesion y puede copiarse como texto.</p>
       </article>
       <article class="soft-panel">
-        <p class="section-label">Modo de uso</p>
-        <p>Las respuestas se guardan automaticamente dentro de la sesion local del paciente.</p>
+        <p class="section-label">Salida del reporte</p>
+        <p>Puntajes del instrumento, lectura breve, alertas y una traduccion dimensional compatible con el paquete HiTOP.</p>
       </article>
       <article class="soft-panel">
         <p class="section-label">Nota</p>
-        <p>Esto es apoyo para cribado y organizacion clinica; no reemplaza juicio profesional.</p>
+        <p>Esto es apoyo para cribado y organizacion clínica, no un sustituto de entrevista diagnóstica.</p>
       </article>
     </aside>
   `;
 
   root.appendChild(screen);
-
   bindAction(screen, "[data-action='begin']", () => {
-    void beginAssessmentSession();
+    state.screen = "question";
+    state.currentIndex = 0;
+    state.copyFeedback = "";
+    render();
   });
-  bindAction(screen, "[data-action='back']", goToCatalog);
+  bindAction(screen, "[data-action='back']", resetToCatalog);
 }
 
 function renderQuestion() {
@@ -770,7 +269,6 @@ function renderQuestion() {
     return;
   }
 
-  const patient = getSelectedPatient();
   const prompts = resolvePrompts(item);
   const screen = document.createElement("section");
   screen.className = "screen";
@@ -778,11 +276,11 @@ function renderQuestion() {
     <div class="question-layout">
       <div class="question-card">
         <div class="question-meta">
-          <span>${escapeHtml(state.instrument.shortName)} · ${escapeHtml(patient?.recordNumber || "")}</span>
+          <span>${escapeHtml(state.instrument.shortName)}</span>
           <span>${state.currentIndex + 1} / ${state.items.length}</span>
         </div>
         <h2 class="question-text">${escapeHtml(item.text)}</h2>
-        <p class="question-helper">${escapeHtml(state.instrument.timeframe)} · guardado automatico local para ${escapeHtml(patient?.fullName || "paciente activo")}.</p>
+        <p class="question-helper">${escapeHtml(state.instrument.timeframe)} · responde lo mas cercano a tu experiencia.</p>
       </div>
 
       <div class="answer-scale answer-scale--stacked">
@@ -790,7 +288,7 @@ function renderQuestion() {
       </div>
 
       <div class="question-footer">
-        <p class="saved-note">${state.notice || "&nbsp;"}</p>
+        <p class="saved-note">${state.copyFeedback || "&nbsp;"}</p>
         <div class="question-nav">
           <button class="secondary-button" type="button" data-action="prev" ${state.currentIndex === 0 ? "disabled" : ""}>Anterior</button>
           <button class="primary-button" type="button" data-action="next" ${!isItemComplete(item) ? "disabled" : ""}>
@@ -870,20 +368,14 @@ function renderPromptBlock(item, prompt) {
 }
 
 function renderResults() {
-  const patient = getSelectedPatient();
   const report = buildReport(state.instrument, state.items, state.responses);
   const sortedTables = report.tables.map((table, tableIndex) => getSortedTable(table, tableIndex));
-
-  if (state.currentSession?.status !== "completed") {
-    void persistCurrentSession({ markCompleted: true, report });
-  }
-
   const screen = document.createElement("section");
   screen.className = "screen";
   screen.innerHTML = `
     <div class="results-layout">
       <div class="results-hero">
-        <p class="eyebrow">${escapeHtml(state.instrument.category)} · ${escapeHtml(patient?.fullName || "")}</p>
+        <p class="eyebrow">${escapeHtml(state.instrument.category)}</p>
         <h2>${escapeHtml(state.instrument.name)}</h2>
         <p class="lede">${escapeHtml(report.summary)}</p>
 
@@ -891,10 +383,9 @@ function renderResults() {
           <button class="primary-button" data-action="copy-summary" type="button">Copiar resumen</button>
           <button class="secondary-button" data-action="copy-table" type="button">Copiar tabla</button>
           <button class="secondary-button" data-action="edit" type="button">Editar respuestas</button>
-          <button class="secondary-button" data-action="patient" type="button">Perfil paciente</button>
           <button class="ghost-button" data-action="catalog" type="button">Otro instrumento</button>
         </div>
-        <p class="saved-note">${state.notice || "&nbsp;"}</p>
+        <p class="saved-note">${state.copyFeedback || "&nbsp;"}</p>
 
         <div class="summary-panel">
           ${report.scores
@@ -997,23 +488,17 @@ function renderResults() {
   root.appendChild(screen);
 
   bindAction(screen, "[data-action='copy-summary']", async () => {
-    await copyText(buildSummaryText(state.instrument.name, report), "Resumen copiado.");
+    await copyText(buildSummaryText(report), "Resumen copiado.");
   });
   bindAction(screen, "[data-action='copy-table']", async () => {
-    await copyText(buildTableText(state.instrument.name, report, sortedTables), "Tabla copiada.");
+    await copyText(buildTableText(report, sortedTables), "Tabla copiada.");
   });
   bindAction(screen, "[data-action='edit']", () => {
-    state.currentIndex = 0;
-    state.notice = "";
     state.screen = "question";
+    state.copyFeedback = "";
     render();
   });
-  bindAction(screen, "[data-action='patient']", () => {
-    state.screen = "patient-detail";
-    render();
-  });
-  bindAction(screen, "[data-action='catalog']", goToCatalog);
-
+  bindAction(screen, "[data-action='catalog']", resetToCatalog);
   screen.querySelectorAll("[data-sort-table]").forEach((button) => {
     button.addEventListener("click", () => {
       const tableIndex = Number(button.dataset.sortTable);
@@ -1021,23 +506,6 @@ function renderResults() {
       toggleTableSort(tableIndex, columnIndex, sortedTables[tableIndex]);
     });
   });
-}
-
-function renderTableHeader(tableIndex, columnIndex, column) {
-  const activeSort = state.tableSorts[tableIndex];
-  const isActive = activeSort?.column === columnIndex;
-  const indicator = isActive ? (activeSort.direction === "desc" ? "↓" : "↑") : "↕";
-  return `
-    <button
-      class="table-sort-button ${isActive ? "is-active" : ""}"
-      type="button"
-      data-sort-table="${tableIndex}"
-      data-sort-column="${columnIndex}"
-    >
-      <span>${escapeHtml(column)}</span>
-      <span class="sort-indicator" aria-hidden="true">${indicator}</span>
-    </button>
-  `;
 }
 
 function bindAction(container, selector, handler) {
@@ -1048,325 +516,7 @@ function bindAction(container, selector, handler) {
   node.addEventListener("click", handler);
 }
 
-async function handleCreateVault(pin, confirmPin) {
-  state.error = "";
-  state.notice = "";
-
-  if (!/^\d{4,}$/.test(pin)) {
-    state.error = "El PIN debe tener al menos 4 digitos.";
-    render();
-    return;
-  }
-
-  if (pin !== confirmPin) {
-    state.error = "Los PIN no coinciden.";
-    render();
-    return;
-  }
-
-  state.loading = true;
-  state.loadingMessage = "Creando boveda local...";
-  render();
-
-  try {
-    const { record, key } = await createVault(pin);
-    vaultKey = key;
-    state.security = record;
-    await refreshPatients();
-    resetPatientDraft();
-    scheduleAutoLock();
-    state.notice = "Boveda creada y desbloqueada.";
-    state.screen = "patients";
-  } catch (error) {
-    console.error("Vault creation failed", error);
-    state.error = "No pude crear la boveda local.";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function handleUnlock(pin) {
-  state.error = "";
-  state.notice = "";
-  state.loading = true;
-  state.loadingMessage = "Desbloqueando suite...";
-  render();
-
-  try {
-    const result = await unlockVault(pin);
-    if (!result.ok) {
-      state.error = result.reason === "invalid-pin" ? "PIN incorrecto." : "No encontre configuracion de seguridad.";
-      state.screen = result.reason === "missing-security" ? "setup-pin" : "unlock";
-      return;
-    }
-
-    vaultKey = result.key;
-    state.security = result.record;
-    scheduleAutoLock();
-    await refreshPatients();
-    resetPatientDraft();
-    state.screen = "patients";
-    state.notice = "Suite desbloqueada.";
-  } catch (error) {
-    console.error("Unlock failed", error);
-    state.error = "No pude desbloquear la boveda local.";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function lockApp(reason = "manual") {
-  clearPendingAdvance();
-  window.clearTimeout(autoLockTimer);
-  autoLockTimer = null;
-  vaultKey = null;
-  persistQueue = Promise.resolve();
-  state.security = await getSecurityRecord().catch(() => state.security);
-  state.notice = reason === "inactivity" ? "La suite se bloqueo por inactividad." : "";
-  state.error = "";
-  state.patientSearch = "";
-  state.search = "";
-  state.category = "all";
-  state.patients = [];
-  state.patientSessions = [];
-  state.selectedPatientId = null;
-  resetPatientDraft();
-  clearAssessmentContext();
-  state.screen = state.security ? "unlock" : "setup-pin";
-  render();
-}
-
-async function confirmAndResetVault() {
-  const confirmed = window.confirm("Esto eliminara pacientes, sesiones y configuracion de seguridad de este navegador. Continuar?");
-  if (!confirmed) {
-    return;
-  }
-
-  state.loading = true;
-  state.loadingMessage = "Reseteando base local...";
-  render();
-
-  try {
-    await resetVault();
-    vaultKey = null;
-    persistQueue = Promise.resolve();
-    state.security = null;
-    state.patients = [];
-    state.patientSessions = [];
-    state.selectedPatientId = null;
-    resetPatientDraft();
-    clearAssessmentContext();
-    state.error = "";
-    state.notice = "La base local fue reseteada.";
-    state.screen = "setup-pin";
-  } catch (error) {
-    console.error("Reset vault failed", error);
-    state.error = "No pude resetear la base local.";
-    state.screen = "unlock";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function refreshPatients() {
-  if (!vaultKey) {
-    state.patients = [];
-    return;
-  }
-
-  state.patients = await listPatients(vaultKey);
-  if (state.selectedPatientId && !state.patients.some((patient) => patient.id === state.selectedPatientId)) {
-    state.selectedPatientId = null;
-    state.patientSessions = [];
-  }
-}
-
-async function refreshPatientSessions() {
-  if (!vaultKey || !state.selectedPatientId) {
-    state.patientSessions = [];
-    return;
-  }
-
-  state.patientSessions = await listSessionsForPatient(vaultKey, state.selectedPatientId);
-}
-
-async function savePatientFromForm(form) {
-  const formData = new FormData(form);
-  const draft = {
-    ...state.patientDraft,
-    fullName: String(formData.get("fullName") || "").trim(),
-    recordNumber: String(formData.get("recordNumber") || "").trim(),
-    dateOfBirth: String(formData.get("dateOfBirth") || "").trim(),
-    sex: String(formData.get("sex") || "").trim(),
-    notes: String(formData.get("notes") || "").trim(),
-  };
-
-  if (!draft.fullName || !draft.recordNumber || !draft.dateOfBirth || !draft.sex) {
-    state.error = "Completa nombre, HC/ID, fecha de nacimiento y sexo.";
-    render();
-    return;
-  }
-
-  const now = new Date().toISOString();
-  const patient = {
-    id: draft.id || crypto.randomUUID(),
-    fullName: draft.fullName,
-    recordNumber: draft.recordNumber,
-    dateOfBirth: draft.dateOfBirth,
-    sex: draft.sex,
-    notes: draft.notes,
-    createdAt: draft.createdAt || now,
-    updatedAt: now,
-  };
-
-  state.loading = true;
-  state.loadingMessage = "Guardando paciente...";
-  render();
-
-  try {
-    await savePatient(vaultKey, patient);
-    await refreshPatients();
-    resetPatientDraft();
-    state.notice = "Paciente guardado localmente.";
-    await openPatient(patient.id);
-  } catch (error) {
-    console.error("Save patient failed", error);
-    state.loading = false;
-    state.error = "No pude guardar el paciente.";
-    render();
-  }
-}
-
-function loadDraftForPatient(patientId) {
-  const patient = state.patients.find((entry) => entry.id === patientId);
-  if (!patient) {
-    return;
-  }
-
-  state.patientDraft = {
-    ...patient,
-  };
-  state.patientFormMode = "edit";
-  state.notice = "";
-  state.error = "";
-}
-
-function resetPatientDraft() {
-  state.patientDraft = createEmptyPatientDraft();
-  state.patientFormMode = "create";
-  state.error = "";
-}
-
-async function openPatient(patientId) {
-  state.loading = true;
-  state.loadingMessage = "Cargando perfil del paciente...";
-  render();
-
-  try {
-    state.selectedPatientId = patientId;
-    await refreshPatientSessions();
-    state.screen = "patient-detail";
-    state.error = "";
-  } catch (error) {
-    console.error("Open patient failed", error);
-    state.error = "No pude abrir el paciente.";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function handleDeletePatient(patientId) {
-  const patient = state.patients.find((entry) => entry.id === patientId);
-  const confirmed = window.confirm(`Eliminar a ${patient?.fullName || "este paciente"} y todas sus sesiones?`);
-  if (!confirmed) {
-    return;
-  }
-
-  state.loading = true;
-  state.loadingMessage = "Eliminando paciente...";
-  render();
-
-  try {
-    await deletePatientAndSessions(patientId);
-    if (state.selectedPatientId === patientId) {
-      state.selectedPatientId = null;
-      state.patientSessions = [];
-      clearAssessmentContext();
-    }
-    await refreshPatients();
-    state.notice = "Paciente eliminado.";
-    state.screen = "patients";
-  } catch (error) {
-    console.error("Delete patient failed", error);
-    state.error = "No pude eliminar el paciente.";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function handleDeleteSession(sessionId) {
-  const session = state.patientSessions.find((entry) => entry.id === sessionId);
-  const confirmed = window.confirm(`Eliminar la sesion ${session?.instrumentName || ""}?`);
-  if (!confirmed) {
-    return;
-  }
-
-  state.loading = true;
-  state.loadingMessage = "Eliminando sesion...";
-  render();
-
-  try {
-    await deleteSession(sessionId);
-    await refreshPatientSessions();
-    await refreshPatients();
-    state.notice = "Sesion eliminada.";
-  } catch (error) {
-    console.error("Delete session failed", error);
-    state.error = "No pude eliminar la sesion.";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-function goToPatients() {
-  clearAssessmentContext();
-  state.screen = "patients";
-  state.notice = "";
-  state.error = "";
-  render();
-}
-
-function goToCatalog() {
-  clearPendingAdvance();
-  clearAssessmentContext();
-  state.screen = state.selectedPatientId ? "catalog" : "patients";
-  state.notice = "";
-  state.error = "";
-  render();
-}
-
-function clearAssessmentContext() {
-  state.instrument = null;
-  state.items = [];
-  state.responses = {};
-  state.currentIndex = 0;
-  state.tableSorts = {};
-  state.currentSession = null;
-}
-
 async function chooseInstrument(id) {
-  if (!state.selectedPatientId) {
-    state.screen = "patients";
-    render();
-    return;
-  }
-
   const instrument = INSTRUMENTS.find((entry) => entry.id === id);
   if (!instrument) {
     return;
@@ -1374,7 +524,6 @@ async function chooseInstrument(id) {
 
   clearPendingAdvance();
   state.loading = true;
-  state.loadingMessage = `Cargando ${instrument.name}...`;
   state.error = "";
   render();
 
@@ -1384,9 +533,8 @@ async function chooseInstrument(id) {
     state.items = items;
     state.responses = {};
     state.currentIndex = 0;
-    state.currentSession = null;
+    state.copyFeedback = "";
     state.tableSorts = {};
-    state.notice = "";
     state.screen = "intro";
   } catch (error) {
     console.error("Instrument load failed", instrument.id, error);
@@ -1396,179 +544,6 @@ async function chooseInstrument(id) {
     state.loading = false;
     render();
   }
-}
-
-async function beginAssessmentSession() {
-  if (!vaultKey || !state.selectedPatientId || !state.instrument) {
-    return;
-  }
-
-  state.loading = true;
-  state.loadingMessage = "Preparando sesion...";
-  render();
-
-  try {
-    const existing = await findInProgressSession(vaultKey, state.selectedPatientId, state.instrument.id);
-    if (existing) {
-      state.currentSession = existing;
-      state.responses = existing.responses || {};
-      state.currentIndex = computeResumeIndex(state.items, state.responses, existing.progressIndex);
-      state.notice = "Sesion reanudada.";
-    } else {
-      const now = new Date().toISOString();
-      state.currentSession = {
-        id: crypto.randomUUID(),
-        patientId: state.selectedPatientId,
-        instrumentId: state.instrument.id,
-        instrumentName: state.instrument.name,
-        startedAt: now,
-        completedAt: null,
-        status: "in_progress",
-        progressIndex: 0,
-        responses: {},
-        scores: [],
-        dimensions: [],
-        alerts: [],
-        reportText: "",
-        tableText: "",
-        createdAt: now,
-        updatedAt: now,
-      };
-      state.responses = {};
-      state.currentIndex = 0;
-      await saveSession(vaultKey, state.currentSession);
-      await refreshPatientSessions();
-      state.notice = "Sesion creada.";
-    }
-
-    state.screen = "question";
-  } catch (error) {
-    console.error("Begin assessment failed", error);
-    state.error = "No pude preparar la sesion del instrumento.";
-    state.screen = "catalog";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function openStoredSession(sessionId) {
-  if (!vaultKey) {
-    return;
-  }
-
-  state.loading = true;
-  state.loadingMessage = "Abriendo sesion guardada...";
-  render();
-
-  try {
-    const session = await getSession(vaultKey, sessionId);
-    if (!session) {
-      throw new Error("missing-session");
-    }
-
-    const instrument = INSTRUMENTS.find((entry) => entry.id === session.instrumentId);
-    if (!instrument) {
-      throw new Error("missing-instrument");
-    }
-
-    const items = await loadInstrumentItems(instrument);
-    state.instrument = instrument;
-    state.items = items;
-    state.responses = session.responses || {};
-    state.currentSession = session;
-    state.currentIndex = computeResumeIndex(items, state.responses, session.progressIndex);
-    state.tableSorts = {};
-    state.notice = session.status === "completed" ? "" : "Sesion reanudada.";
-    state.screen = session.status === "completed" ? "results" : "question";
-  } catch (error) {
-    console.error("Open stored session failed", error);
-    state.error = "No pude abrir la sesion guardada.";
-    state.screen = "patient-detail";
-  } finally {
-    state.loading = false;
-    render();
-  }
-}
-
-async function persistCurrentSession({ markCompleted = false, report = null } = {}) {
-  if (!vaultKey || !state.currentSession || !state.instrument) {
-    return;
-  }
-
-  const activeKey = vaultKey;
-  const currentReport = report || (allItemsComplete() ? buildReport(state.instrument, state.items, state.responses) : null);
-  const now = new Date().toISOString();
-  const completed = Boolean(markCompleted);
-
-  const nextSession = {
-    ...state.currentSession,
-    instrumentId: state.instrument.id,
-    instrumentName: state.instrument.name,
-    responses: structuredClone(state.responses),
-    progressIndex: computePersistedProgressIndex(completed),
-    status: completed ? "completed" : "in_progress",
-    completedAt: completed ? state.currentSession.completedAt || now : null,
-    scores: currentReport ? currentReport.scores : state.currentSession.scores || [],
-    dimensions: currentReport ? currentReport.dimensions : state.currentSession.dimensions || [],
-    alerts: currentReport ? currentReport.alerts : state.currentSession.alerts || [],
-    reportText: currentReport ? buildSummaryText(state.instrument.name, currentReport) : state.currentSession.reportText || "",
-    tableText: currentReport ? buildTableText(state.instrument.name, currentReport) : state.currentSession.tableText || "",
-    updatedAt: now,
-  };
-
-  state.currentSession = nextSession;
-  if (completed) {
-    state.notice = "Evaluacion guardada en el historial local.";
-  }
-
-  await queuePersist(async () => {
-    if (!activeKey) {
-      return;
-    }
-    await saveSession(activeKey, nextSession);
-    if (state.selectedPatientId === nextSession.patientId) {
-      await refreshPatientSessions();
-    }
-  });
-}
-
-function queuePersist(task) {
-  persistQueue = persistQueue
-    .then(task)
-    .catch((error) => {
-      console.error("Persist failed", error);
-      state.error = "No pude guardar localmente la ultima actualizacion.";
-      render();
-    });
-
-  return persistQueue;
-}
-
-function computePersistedProgressIndex(markCompleted = false) {
-  if (markCompleted) {
-    return Math.max(0, state.items.length - 1);
-  }
-
-  const currentItem = state.items[state.currentIndex];
-  if (!currentItem) {
-    return state.currentIndex;
-  }
-
-  if (isItemComplete(currentItem) && state.currentIndex < state.items.length - 1) {
-    return state.currentIndex + 1;
-  }
-
-  return state.currentIndex;
-}
-
-function computeResumeIndex(items, responses, storedIndex = 0) {
-  const firstIncomplete = items.findIndex((item) => !isItemCompleteForResponses(item, responses));
-  if (firstIncomplete === -1) {
-    return Math.max(0, Math.min(items.length - 1, storedIndex || items.length - 1));
-  }
-
-  return Math.max(0, Math.min(firstIncomplete, storedIndex ?? firstIncomplete));
 }
 
 async function loadInstrumentItems(instrument) {
@@ -1656,28 +631,13 @@ function parseTableMarkdown(markdown) {
     const options = [];
     for (let index = 1; index < cells.length; index += 1) {
       const rawCell = cells[index];
-      if (!rawCell || isSelectionMarkerCell(rawCell)) {
+      if (!rawCell || rawCell === "[ ]") {
         continue;
       }
       const headerLabel = cleanMarkdown(headerCells?.[index] || "");
-      const headerValue = extractLastNumber(headerLabel);
-      const rawValue = extractLastNumber(rawCell);
-      const rawLooksNumeric = /^[+-]?\d+([.,]\d+)?$/.test(rawCell);
-      const headerLooksNumeric = /^[+-]?\d+([.,]\d+)?$/.test(headerLabel);
-
-      let value = index - 1;
-      let label = rawCell.replace(/\(\d+\)/g, "").trim();
-
-      if (rawLooksNumeric) {
-        value = rawValue ?? index - 1;
-        label = headerLabel;
-      } else if (headerLooksNumeric) {
-        value = rawValue ?? headerValue ?? index - 1;
-      } else if (rawValue !== null && headerLabel) {
-        value = rawValue;
-        label = headerLabel;
-      }
-
+      const numericMatch = rawCell.match(/(\d+)/g);
+      const value = numericMatch ? Number(numericMatch[numericMatch.length - 1]) : index - 1;
+      const label = /^\d+$/.test(rawCell) ? headerLabel : rawCell.replace(/\(\d+\)/g, "").trim();
       options.push(makeOption(value, label));
     }
 
@@ -1710,19 +670,6 @@ function cleanMarkdown(text) {
   return text.replace(/\*\*/g, "").replace(/`/g, "").trim();
 }
 
-function isSelectionMarkerCell(text) {
-  return /^\[\s*[xX]?\s*\]\*?$/.test(text.trim());
-}
-
-function extractLastNumber(text) {
-  const matches = text.match(/-?\d+(?:[.,]\d+)?/g);
-  if (!matches?.length) {
-    return null;
-  }
-
-  return Number(matches[matches.length - 1].replace(",", "."));
-}
-
 function stripLeadingNumber(text) {
   return text.replace(/^\d+\.\s*/, "").trim();
 }
@@ -1749,18 +696,6 @@ function getFilteredInstruments() {
   });
 }
 
-function getFilteredPatients() {
-  const query = state.patientSearch.trim().toLowerCase();
-  if (!query) {
-    return state.patients;
-  }
-
-  return state.patients.filter((patient) => {
-    const haystack = [patient.fullName, patient.recordNumber, patient.dateOfBirth, patient.sex, patient.notes].join(" ").toLowerCase();
-    return haystack.includes(query);
-  });
-}
-
 function resolvePrompts(item) {
   if (item.prompts?.length) {
     return item.prompts.map((prompt) => ({
@@ -1780,11 +715,7 @@ function resolvePrompts(item) {
 }
 
 function getPromptValue(item, promptId) {
-  return getPromptValueFromResponses(state.responses, item.id, promptId);
-}
-
-function getPromptValueFromResponses(responses, itemId, promptId) {
-  const stored = responses[itemId];
+  const stored = state.responses[item.id];
   if (stored === undefined || stored === null) {
     return null;
   }
@@ -1801,15 +732,14 @@ function setResponse(item, promptId, value, options = {}) {
   clearPendingAdvance();
 
   if (promptId) {
-    const next = typeof state.responses[item.id] === "object" && state.responses[item.id] !== null ? { ...state.responses[item.id] } : {};
+    const next = typeof state.responses[item.id] === "object" && state.responses[item.id] !== null ? state.responses[item.id] : {};
     next[promptId] = value;
     state.responses[item.id] = next;
   } else {
     state.responses[item.id] = value;
   }
 
-  state.notice = "Guardado local automatico.";
-  void persistCurrentSession();
+  state.copyFeedback = "Respuesta guardada.";
   render();
 
   if (options.autoAdvance === false) {
@@ -1828,26 +758,17 @@ function shouldAutoAdvance(item) {
 }
 
 function isItemComplete(item) {
-  return isItemCompleteForResponses(item, state.responses);
-}
-
-function isItemCompleteForResponses(item, responses) {
   const prompts = resolvePrompts(item);
   return prompts.every((prompt) => {
-    const value = getPromptValueFromResponses(responses, item.id, prompt.id);
+    const value = getPromptValue(item, prompt.id);
     return value !== null && value !== undefined && value !== "";
   });
-}
-
-function allItemsComplete() {
-  return state.items.every((item) => isItemCompleteForResponses(item, state.responses));
 }
 
 function goPrev() {
   clearPendingAdvance();
   state.currentIndex = Math.max(0, state.currentIndex - 1);
-  state.notice = "";
-  void persistCurrentSession();
+  state.copyFeedback = "";
   render();
 }
 
@@ -1860,14 +781,13 @@ function goNext() {
 
   if (state.currentIndex >= state.items.length - 1) {
     state.screen = "results";
-    state.notice = "";
+    state.copyFeedback = "";
     render();
     return;
   }
 
   state.currentIndex += 1;
-  state.notice = "";
-  void persistCurrentSession();
+  state.copyFeedback = "";
   render();
 }
 
@@ -1878,137 +798,875 @@ function clearPendingAdvance() {
   }
 }
 
+function resetToCatalog() {
+  clearPendingAdvance();
+  state.screen = "catalog";
+  state.instrument = null;
+  state.items = [];
+  state.responses = {};
+  state.currentIndex = 0;
+  state.copyFeedback = "";
+  state.tableSorts = {};
+  render();
+}
+
+function buildReport(instrument, items, responses) {
+  const accessor = createAccessor(items, responses);
+
+  switch (instrument.id) {
+    case "pid5":
+      return buildPid5Report(items, responses);
+    case "phq9":
+      return buildSimpleSumReport({
+        summary: "El PHQ-9 resume severidad depresiva reciente.",
+        total: sumRange(accessor, 1, 9),
+        max: 27,
+        label: "Puntaje total PHQ-9",
+        bands: [
+          { max: 4, label: "Minima o ausente" },
+          { max: 9, label: "Leve" },
+          { max: 14, label: "Moderada" },
+          { max: 19, label: "Moderadamente grave" },
+          { max: 27, label: "Grave" },
+        ],
+        alerts: accessor(9) > 0 ? ["El item 9 fue positivo: revisar riesgo suicida de forma clinica."] : [],
+        dimensions: [
+          makeDimension("Internalizing · distress", percent(sumRange(accessor, 1, 9), 27), `${sumRange(accessor, 1, 9)}/27`, "Sintomas depresivos."),
+        ],
+      });
+    case "phq2":
+      return buildSimpleSumReport({
+        summary: "El PHQ-2 concentra anhedonia y animo bajo.",
+        total: sumRange(accessor, 1, 2),
+        max: 6,
+        label: "Puntaje total PHQ-2",
+        bands: [
+          { max: 2, label: "Bajo" },
+          { max: 6, label: "Posible caso si >= 3" },
+        ],
+        alerts: sumRange(accessor, 1, 2) >= 3 ? ["Punto de corte positivo para cribado de depresion."] : [],
+        dimensions: [makeDimension("Depressive distress", percent(sumRange(accessor, 1, 2), 6), `${sumRange(accessor, 1, 2)}/6`, "Cribado ultrabreve.")],
+      });
+    case "gad7":
+      return buildSimpleSumReport({
+        summary: "El GAD-7 organiza severidad de ansiedad generalizada.",
+        total: sumRange(accessor, 1, 7),
+        max: 21,
+        label: "Puntaje total GAD-7",
+        bands: [
+          { max: 4, label: "Minima" },
+          { max: 9, label: "Leve" },
+          { max: 14, label: "Moderada" },
+          { max: 21, label: "Grave" },
+        ],
+        alerts: sumRange(accessor, 1, 7) >= 10 ? ["Punto de corte positivo para ansiedad clinicamente relevante."] : [],
+        dimensions: [makeDimension("Internalizing · fear", percent(sumRange(accessor, 1, 7), 21), `${sumRange(accessor, 1, 7)}/21`, "Ansiedad generalizada.")],
+      });
+    case "gad2":
+      return buildSimpleSumReport({
+        summary: "El GAD-2 resume nerviosismo y preocupacion fuera de control.",
+        total: sumRange(accessor, 1, 2),
+        max: 6,
+        label: "Puntaje total GAD-2",
+        bands: [{ max: 2, label: "Bajo" }, { max: 6, label: "Posible caso si >= 3" }],
+        alerts: sumRange(accessor, 1, 2) >= 3 ? ["Punto de corte positivo para cribado de ansiedad."] : [],
+        dimensions: [makeDimension("Fear anxiety", percent(sumRange(accessor, 1, 2), 6), `${sumRange(accessor, 1, 2)}/6`, "Cribado breve.")],
+      });
+    case "phq4": {
+      const depression = sumRange(accessor, 1, 2);
+      const anxiety = sumRange(accessor, 3, 4);
+      const total = depression + anxiety;
+      return {
+        summary: "El PHQ-4 integra distress depresivo y ansioso en un cribado muy breve.",
+        scores: [
+          buildScore("Total PHQ-4", total, 12, bandLabel(total, [{ max: 2, label: "Normal" }, { max: 5, label: "Leve" }, { max: 8, label: "Moderado" }, { max: 12, label: "Severo" }])),
+          buildScore("Subescala depresiva", depression, 6, depression >= 3 ? "Positiva" : "No positiva"),
+          buildScore("Subescala ansiosa", anxiety, 6, anxiety >= 3 ? "Positiva" : "No positiva"),
+        ],
+        alerts: [
+          ...(depression >= 3 ? ["La subescala depresiva fue positiva."] : []),
+          ...(anxiety >= 3 ? ["La subescala ansiosa fue positiva."] : []),
+        ],
+        dimensions: [
+          makeDimension("Internalizing · distress", percent(depression, 6), `${depression}/6`, "Componente depresivo."),
+          makeDimension("Internalizing · fear", percent(anxiety, 6), `${anxiety}/6`, "Componente ansioso."),
+        ],
+        tables: [],
+      };
+    }
+    case "k10": {
+      const total = sumRange(accessor, 1, 10);
+      return buildSimpleSumReport({
+        summary: "La K10 resume malestar psicologico general del ultimo mes.",
+        total,
+        max: 50,
+        label: "Puntaje total K10",
+        bands: [{ max: 19, label: "Probablemente bien" }, { max: 24, label: "Leve" }, { max: 29, label: "Moderado" }, { max: 50, label: "Severo" }],
+        alerts: total >= 30 ? ["Malestar psicologico severo segun K10."] : [],
+        dimensions: [makeDimension("General distress", percent(total - 10, 40), `${total}/50`, "Malestar inespecifico.")],
+      });
+    }
+    case "k6": {
+      const raw = sumRange(accessor, 1, 6);
+      const adjusted = raw - 6;
+      return buildSimpleSumReport({
+        summary: "La K6 comprime la carga de distress severo en 6 items.",
+        total: adjusted,
+        max: 24,
+        label: "Puntaje ajustado K6",
+        bands: [{ max: 4, label: "Bajo" }, { max: 12, label: "Moderado" }, { max: 24, label: "Elevado" }],
+        alerts: adjusted >= 13 ? ["Punto de corte positivo para distress severo."] : [],
+        dimensions: [makeDimension("General distress", percent(adjusted, 24), `${adjusted}/24`, "Version reducida K6.")],
+      });
+    }
+    case "who5": {
+      const raw = sumRange(accessor, 1, 5);
+      const pct = raw * 4;
+      return {
+        summary: "El WHO-5 se lee al reves: a menor puntuacion, menor bienestar.",
+        scores: [
+          buildScore("Puntaje bruto", raw, 25, rawBand(raw, [{ max: 7, label: "Muy bajo" }, { max: 12, label: "Bajo" }, { max: 18, label: "Intermedio" }, { max: 25, label: "Bueno" }])),
+          buildScore("Indice porcentual", pct, 100, pct <= 28 ? "Muy bajo" : pct < 50 ? "Bajo" : "Adecuado"),
+        ],
+        alerts: [
+          ...(pct < 50 ? ["Bienestar bajo: sugiere revisar sintomas depresivos."] : []),
+          ...(pct <= 28 ? ["Punto de corte muy bajo, compatible con probable depresion."] : []),
+        ],
+        dimensions: [makeDimension("Wellbeing", pct, `${pct}/100`, "A mayor puntaje, mayor bienestar.")],
+        tables: [],
+      };
+    }
+    case "swls5": {
+      const total = sumRange(accessor, 1, 5);
+      return buildSimpleSumReport({
+        summary: "La SWLS-5 describe satisfaccion global con la vida.",
+        total,
+        max: 25,
+        label: "Puntaje total SWLS-5",
+        bands: [{ max: 9, label: "Muy baja" }, { max: 14, label: "Baja" }, { max: 19, label: "Ligeramente baja" }, { max: 20, label: "Neutral" }, { max: 25, label: "Satisfecha" }],
+        alerts: [],
+        dimensions: [makeDimension("Life satisfaction", percent(total - 5, 20), `${total}/25`, "A mayor puntaje, mayor satisfaccion.")],
+      });
+    }
+    case "whodas12": {
+      const total = sumRange(accessor, 1, 12);
+      const scaled = roundTo(((total - 12) / 48) * 100, 1);
+      const domains = [
+        ["Comprension y comunicacion", meanValues([accessor(3), accessor(6)])],
+        ["Movilidad", meanValues([accessor(1), accessor(7)])],
+        ["Autocuidado", meanValues([accessor(8), accessor(9)])],
+        ["Relacionarse", meanValues([accessor(10), accessor(11)])],
+        ["Actividades de vida", meanValues([accessor(2), accessor(12)])],
+        ["Participacion", meanValues([accessor(4), accessor(5)])],
+      ];
+      return {
+        summary: "El WHODAS resume discapacidad funcional reciente en seis dominios.",
+        scores: [
+          buildScore("Suma simple", total, 60, rawBand(total, [{ max: 20, label: "Baja" }, { max: 35, label: "Intermedia" }, { max: 60, label: "Alta" }])),
+          buildScore("Escala 0-100", scaled, 100, scaled >= 50 ? "Limitacion alta" : "Limitacion baja a media"),
+        ],
+        alerts: [],
+        dimensions: [makeDimension("Global disability", scaled, `${scaled}/100`, "Mayor puntaje = mayor limitacion funcional.")],
+        tables: [
+          {
+            title: "Dominios funcionales",
+            columns: ["Dominio", "Promedio"],
+            rows: domains.map(([label, value]) => [label, formatNumber(value)]),
+          },
+        ],
+      };
+    }
+    case "aq10": {
+      const positive = countAq10(accessor);
+      return buildSimpleSumReport({
+        summary: "El AQ-10 cuenta respuestas que sugieren rasgos autistas.",
+        total: positive,
+        max: 10,
+        label: "Respuestas positivas AQ-10",
+        bands: [{ max: 5, label: "Por debajo del punto de corte" }, { max: 10, label: "Punto de corte positivo" }],
+        alerts: positive >= 6 ? ["AQ-10 positivo: considerar evaluacion diagnostica completa."] : [],
+        dimensions: [makeDimension("Autistic traits", percent(positive, 10), `${positive}/10`, "Cribado breve de rasgos.")],
+      });
+    }
+    case "asrs6": {
+      const raw = sumRange(accessor, 1, 6);
+      const screenCount = countAsrsPartA(accessor, 6);
+      return {
+        summary: "La Parte A del ASRS concentra los items mas predictivos para cribado.",
+        scores: [
+          buildScore("Cribado Parte A", screenCount, 6, screenCount >= 4 ? "Positivo" : "No positivo"),
+          buildScore("Puntaje crudo", raw, 24, rawBand(raw, [{ max: 8, label: "Bajo" }, { max: 16, label: "Intermedio" }, { max: 24, label: "Alto" }])),
+        ],
+        alerts: screenCount >= 4 ? ["Parte A positiva: sintomas altamente consistentes con TDAH en adultos."] : [],
+        dimensions: [makeDimension("Attention / hyperactivity", percent(raw, 24), `${raw}/24`, "Cribado breve de TDAH.")],
+        tables: [],
+      };
+    }
+    case "asrs18": {
+      const raw = sumRange(accessor, 1, 18);
+      const partA = countAsrsPartA(accessor, 18);
+      const partB = sumRange(accessor, 7, 18);
+      return {
+        summary: "La version completa del ASRS amplia detalle sobre inatencion, inquietud e impulsividad.",
+        scores: [
+          buildScore("Cribado Parte A", partA, 6, partA >= 4 ? "Positivo" : "No positivo"),
+          buildScore("Puntaje total", raw, 72, rawBand(raw, [{ max: 24, label: "Bajo" }, { max: 48, label: "Intermedio" }, { max: 72, label: "Alto" }])),
+          buildScore("Parte B", partB, 48, rawBand(partB, [{ max: 16, label: "Baja carga" }, { max: 32, label: "Carga intermedia" }, { max: 48, label: "Carga alta" }])),
+        ],
+        alerts: partA >= 4 ? ["Parte A positiva: vale la pena evaluacion clinica de TDAH."] : [],
+        dimensions: [
+          makeDimension("Attention dysregulation", percent(sumRange(accessor, 1, 9), 36), `${sumRange(accessor, 1, 9)}/36`, "Inatencion y organizacion."),
+          makeDimension("Hyperactivity / impulsivity", percent(sumRange(accessor, 10, 18), 36), `${sumRange(accessor, 10, 18)}/36`, "Actividad, inquietud e impulsividad."),
+        ],
+        tables: [],
+      };
+    }
+    case "audit": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El AUDIT organiza consumo, sintomas de dependencia y dano por alcohol.",
+        total,
+        max: 40,
+        label: "Puntaje total AUDIT",
+        bands: [{ max: 7, label: "Zona I · bajo riesgo" }, { max: 15, label: "Zona II · riesgo" }, { max: 19, label: "Zona III · perjudicial" }, { max: 40, label: "Zona IV · posible dependencia" }],
+        alerts: total >= 20 ? ["Zona IV: posible dependencia, conviene evaluacion especializada."] : total >= 8 ? ["AUDIT positivo para consumo de riesgo o perjudicial."] : [],
+        dimensions: [
+          makeDimension("Alcohol use risk", percent(total, 40), `${total}/40`, "Mayor puntaje = mayor severidad."),
+          makeDimension("Alcohol pattern", percent(sumRange(accessor, 1, 3), 12), `${sumRange(accessor, 1, 3)}/12`, "Frecuencia e intensidad de consumo."),
+        ],
+      });
+    }
+    case "auditc": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El AUDIT-C resume patron de consumo alcoholico reciente.",
+        total,
+        max: 12,
+        label: "Puntaje total AUDIT-C",
+        bands: [{ max: 3, label: "Bajo" }, { max: 12, label: "Riesgo elevado" }],
+        alerts: total >= 4 ? ["Punto de corte positivo de forma general; considerar diferencias por sexo biologico."] : [],
+        dimensions: [makeDimension("Alcohol risk", percent(total, 12), `${total}/12`, "Version breve del AUDIT.")],
+      });
+    }
+    case "dudit": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El DUDIT resume riesgo y posible dependencia por drogas distintas al alcohol.",
+        total,
+        max: 44,
+        label: "Puntaje total DUDIT",
+        bands: [{ max: 1, label: "Sin riesgo o minimo" }, { max: 5, label: "Bajo" }, { max: 24, label: "Riesgo / perjudicial" }, { max: 44, label: "Posible dependencia" }],
+        alerts: total >= 25 ? ["Puntaje compatible con posible dependencia."] : total >= 6 ? ["Puntaje compatible con consumo de riesgo/perjudicial."] : [],
+        dimensions: [makeDimension("Drug use risk", percent(total, 44), `${total}/44`, "Mayor puntaje = mayor problema de consumo.")],
+      });
+    }
+    case "cageaid": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El CAGE-AID es un cribado rapido para alcohol y drogas.",
+        total,
+        max: 4,
+        label: "Puntaje total CAGE-AID",
+        bands: [{ max: 1, label: "Bajo" }, { max: 4, label: "Positivo si >= 2" }],
+        alerts: total >= 2 ? ["Cribado positivo para problemas con alcohol o drogas."] : [],
+        dimensions: [makeDimension("Dependence risk", percent(total, 4), `${total}/4`, "Screening rapido.")],
+      });
+    }
+    case "cuditr": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El CUDIT-R orienta riesgo y posible trastorno por consumo de cannabis.",
+        total,
+        max: 32,
+        label: "Puntaje total CUDIT-R",
+        bands: [{ max: 7, label: "Bajo" }, { max: 11, label: "Consumo riesgoso" }, { max: 32, label: "Probable trastorno por consumo" }],
+        alerts: total >= 12 ? ["CUDIT-R en rango de probable trastorno por consumo de cannabis."] : total >= 8 ? ["CUDIT-R en rango de consumo riesgoso."] : [],
+        dimensions: [makeDimension("Cannabis risk", percent(total, 32), `${total}/32`, "Mayor puntaje = mayor severidad.")],
+      });
+    }
+    case "ftnd": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El FTND estima gravedad de dependencia a nicotina.",
+        total,
+        max: 10,
+        label: "Puntaje total FTND",
+        bands: [{ max: 2, label: "Muy baja" }, { max: 4, label: "Baja" }, { max: 5, label: "Media" }, { max: 7, label: "Alta" }, { max: 10, label: "Muy alta" }],
+        alerts: total >= 6 ? ["Dependencia nicotinica alta o muy alta."] : [],
+        dimensions: [makeDimension("Nicotine dependence", percent(total, 10), `${total}/10`, "Dependencia a nicotina.")],
+      });
+    }
+    case "pcl5": {
+      const total = sumRange(accessor, 1, 20);
+      const b = sumRange(accessor, 1, 5);
+      const c = sumRange(accessor, 6, 7);
+      const d = sumRange(accessor, 8, 14);
+      const e = sumRange(accessor, 15, 20);
+      const probable = total >= 31 && countAtLeast(accessor, [1, 2, 3, 4, 5], 2) >= 1 && countAtLeast(accessor, [6, 7], 2) >= 1 && countAtLeast(accessor, [8, 9, 10, 11, 12, 13, 14], 2) >= 2 && countAtLeast(accessor, [15, 16, 17, 18, 19, 20], 2) >= 2;
+      return {
+        summary: "El PCL-5 entrega severidad total y lectura por clusters DSM-5.",
+        scores: [
+          buildScore("Puntaje total PCL-5", total, 80, total >= 31 ? "Rango probable de TEPT" : "Por debajo del punto de corte"),
+          buildScore("Cluster B", b, 20, ""),
+          buildScore("Cluster C", c, 8, ""),
+          buildScore("Cluster D", d, 28, ""),
+          buildScore("Cluster E", e, 24, ""),
+        ],
+        alerts: probable ? ["Cumple algoritmo provisional DSM-5 para probable TEPT."] : total >= 31 ? ["Puntaje alto, aunque el algoritmo completo no se cumple del todo."] : [],
+        dimensions: [
+          makeDimension("Traumatic stress", percent(total, 80), `${total}/80`, "Carga sintomatica total."),
+          makeDimension("Hyperarousal", percent(e, 24), `${e}/24`, "Activacion / reactividad."),
+        ],
+        tables: [
+          {
+            title: "Clusters DSM-5",
+            columns: ["Cluster", "Puntaje"],
+            rows: [
+              ["B · Reexperimentacion", String(b)],
+              ["C · Evitacion", String(c)],
+              ["D · Cognicion / animo", String(d)],
+              ["E · Reactividad", String(e)],
+            ],
+          },
+        ],
+      };
+    }
+    case "pcptsd5": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El PC-PTSD-5 es un cribado breve de sintomas postraumaticos.",
+        total,
+        max: 5,
+        label: "Puntaje total PC-PTSD-5",
+        bands: [{ max: 2, label: "No positivo" }, { max: 5, label: "Positivo si >= 3" }],
+        alerts: total >= 3 ? ["Cribado positivo para sintomas postraumaticos."] : [],
+        dimensions: [makeDimension("Traumatic stress", percent(total, 5), `${total}/5`, "Cribado rapido postraumatico.")],
+      });
+    }
+    case "ace10": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El ACE-10 estima carga de adversidad temprana.",
+        total,
+        max: 10,
+        label: "Puntaje total ACE",
+        bands: [{ max: 0, label: "Sin ACEs" }, { max: 1, label: "Baja carga" }, { max: 3, label: "Carga moderada" }, { max: 10, label: "Carga alta" }],
+        alerts: total >= 4 ? ["Carga ACE alta: mayor vulnerabilidad acumulativa a largo plazo."] : [],
+        dimensions: [makeDimension("Developmental adversity", percent(total, 10), `${total}/10`, "Carga acumulada de experiencias adversas.")],
+      });
+    }
+    case "cape15": {
+      const frequency = meanValues(items.map((item) => getObjectPromptValue(responses[item.id], "frequency")));
+      const distress = meanValues(items.map((item) => getObjectPromptValue(responses[item.id], "distress")));
+      const burden = roundTo(((frequency - 1) + (distress - 1)) / 6 * 100, 0);
+      return {
+        summary: "El CAPE-15 mira frecuencia de experiencias psicotiformes y cuanto malestar generan.",
+        scores: [
+          buildScore("Frecuencia media", frequency, 4, bandLabel(frequency, [{ max: 1.49, label: "Baja" }, { max: 2.49, label: "Intermedia" }, { max: 4, label: "Alta" }])),
+          buildScore("Malestar medio", distress, 4, bandLabel(distress, [{ max: 1.49, label: "Bajo" }, { max: 2.49, label: "Intermedio" }, { max: 4, label: "Alto" }])),
+        ],
+        alerts: burden >= 50 ? ["La combinacion de frecuencia y malestar sugiere revisar experiencias inusuales con mayor detalle."] : [],
+        dimensions: [
+          makeDimension("Thought disorder proneness", burden, `${formatNumber(frequency)} / ${formatNumber(distress)}`, "Resumen exploratorio de frecuencia + malestar."),
+        ],
+        tables: [],
+      };
+    }
+    case "hcl32": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El HCL-32 suma periodos de activacion/hipomania referidos por la persona.",
+        total,
+        max: 32,
+        label: "Respuestas afirmativas",
+        bands: [{ max: 13, label: "Por debajo del punto de corte" }, { max: 32, label: "Posible espectro bipolar" }],
+        alerts: total >= 14 ? ["HCL-32 positivo: alta probabilidad de espectro bipolar, especialmente tipo II."] : [],
+        dimensions: [makeDimension("Mania activation", percent(total, 32), `${total}/32`, "Activacion / hipomania referida.")],
+      });
+    }
+    case "lpfsbf": {
+      const identity = meanRange(accessor, 1, 3);
+      const selfDirection = meanRange(accessor, 4, 6);
+      const empathy = meanRange(accessor, 7, 9);
+      const intimacy = meanRange(accessor, 10, 12);
+      const total = sumRange(accessor, 1, 12);
+      return {
+        summary: "El LPFS-BF organiza el deterioro de funcionamiento de personalidad en cuatro dominios.",
+        scores: [
+          buildScore("Puntaje total", total, 48, rawBand(total, [{ max: 20, label: "Bajo" }, { max: 32, label: "Intermedio" }, { max: 48, label: "Alto" }])),
+          buildScore("Promedio global", roundTo(total / 12, 2), 4, ""),
+        ],
+        alerts: [],
+        dimensions: [makeDimension("Personality functioning", percent(total - 12, 36), `${total}/48`, "Mayor puntaje = mayor deterioro.")],
+        tables: [
+          {
+            title: "Dominios LPFS-BF",
+            columns: ["Dominio", "Promedio"],
+            rows: [
+              ["Identidad", formatNumber(identity)],
+              ["Autodireccion", formatNumber(selfDirection)],
+              ["Empatia", formatNumber(empathy)],
+              ["Intimidad", formatNumber(intimacy)],
+            ],
+          },
+        ],
+      };
+    }
+    case "pg13r": {
+      const hasLoss = accessor(1) === 1;
+      const months = accessor(2) ?? 0;
+      const total = sumRange(accessor, 3, 12);
+      const core = Math.max(accessor(3) || 0, accessor(4) || 0);
+      const accessory = countAtLeast(accessor, [5, 6, 7, 8, 9, 10, 11, 12], 4);
+      const impact = accessor(13) === 1;
+      const probable = hasLoss && months >= 12 && core >= 4 && accessory >= 3 && impact;
+      return {
+        summary: "El PG-13-R combina puerta de entrada, severidad y algoritmo provisional para duelo prolongado.",
+        scores: [
+          buildScore("Puntaje sintomatico", total, 50, total >= 30 ? "Elevado" : "Bajo a intermedio"),
+          buildScore("Meses desde la perdida", months, Math.max(12, months), months >= 12 ? "Criterio temporal DSM-5-TR" : "Menos de 12 meses"),
+        ],
+        alerts: [
+          ...(hasLoss ? [] : ["No se confirmo la perdida significativa en el filtro inicial."]),
+          ...(probable ? ["Algoritmo DSM-5-TR provisional positivo para duelo prolongado."] : []),
+        ],
+        dimensions: [makeDimension("Prolonged grief", percent(total - 10, 40), `${total}/50`, "Severidad de sintomas de duelo prolongado.")],
+        tables: [],
+      };
+    }
+    case "phq15": {
+      const total = sumRange(accessor, 1, 15);
+      return buildSimpleSumReport({
+        summary: "El PHQ-15 resume carga de sintomas somaticos.",
+        total,
+        max: 30,
+        label: "Puntaje total PHQ-15",
+        bands: [{ max: 4, label: "Minima" }, { max: 9, label: "Baja" }, { max: 14, label: "Media" }, { max: 30, label: "Alta" }],
+        alerts: total >= 15 ? ["Carga somatica alta en el PHQ-15."] : [],
+        dimensions: [makeDimension("Somatoform burden", percent(total, 30), `${total}/30`, "Carga somatica percibida.")],
+      });
+    }
+    case "sss8": {
+      const total = sumRange(accessor, 1, 8);
+      return buildSimpleSumReport({
+        summary: "El SSS-8 ofrece una lectura rapida de carga somatica de la ultima semana.",
+        total,
+        max: 32,
+        label: "Puntaje total SSS-8",
+        bands: [{ max: 3, label: "Minima" }, { max: 7, label: "Baja" }, { max: 11, label: "Media" }, { max: 15, label: "Alta" }, { max: 32, label: "Muy alta" }],
+        alerts: total >= 16 ? ["Carga somatica muy alta en el SSS-8."] : [],
+        dimensions: [makeDimension("Somatic symptom severity", percent(total, 32), `${total}/32`, "Molestia somatica reciente.")],
+      });
+    }
+    case "isi": {
+      const total = sumRange(accessor, 1, 7);
+      return buildSimpleSumReport({
+        summary: "El ISI resume gravedad percibida del insomnio.",
+        total,
+        max: 28,
+        label: "Puntaje total ISI",
+        bands: [{ max: 7, label: "Sin insomnio clinicamente significativo" }, { max: 14, label: "Subumbral" }, { max: 21, label: "Moderado" }, { max: 28, label: "Severo" }],
+        alerts: total >= 15 ? ["Insomnio clinicamente relevante en el ISI."] : [],
+        dimensions: [makeDimension("Sleep disturbance", percent(total, 28), `${total}/28`, "Problemas de inicio/mantenimiento y preocupacion por el sueno.")],
+      });
+    }
+    case "ess": {
+      const total = sumRange(accessor, 1, 8);
+      return buildSimpleSumReport({
+        summary: "La ESS estima somnolencia diurna en situaciones cotidianas.",
+        total,
+        max: 24,
+        label: "Puntaje total ESS",
+        bands: [{ max: 10, label: "Normal" }, { max: 12, label: "Leve" }, { max: 15, label: "Moderada" }, { max: 24, label: "Alta" }],
+        alerts: total >= 11 ? ["Somnolencia diurna excesiva en la ESS."] : [],
+        dimensions: [makeDimension("Daytime sleepiness", percent(total, 24), `${total}/24`, "Probabilidad de quedarse dormido/a.")],
+      });
+    }
+    case "pss10": {
+      const total = computePss10(accessor);
+      return buildSimpleSumReport({
+        summary: "La PSS-10 resume la sensacion de sobrecarga y control percibido del ultimo mes.",
+        total,
+        max: 40,
+        label: "Puntaje total PSS-10",
+        bands: [{ max: 13, label: "Bajo" }, { max: 26, label: "Moderado" }, { max: 40, label: "Alto" }],
+        alerts: total >= 27 ? ["Estres percibido alto en la PSS-10."] : [],
+        dimensions: [makeDimension("Stress load", percent(total, 40), `${total}/40`, "Estres percibido global.")],
+      });
+    }
+    case "scoff": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El SCOFF es un cribado muy breve de posible patologia alimentaria.",
+        total,
+        max: 5,
+        label: "Respuestas afirmativas",
+        bands: [{ max: 1, label: "No positivo" }, { max: 5, label: "Positivo si >= 2" }],
+        alerts: total >= 2 ? ["SCOFF positivo: conviene explorar TCA con mayor detalle."] : [],
+        dimensions: [makeDimension("Eating pathology risk", percent(total, 5), `${total}/5`, "Cribado breve de TCA.")],
+      });
+    }
+    case "ucla3": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "La UCLA-3 resume soledad subjetiva.",
+        total,
+        max: 9,
+        label: "Puntaje total UCLA-3",
+        bands: [{ max: 4, label: "Baja" }, { max: 6, label: "Moderada" }, { max: 9, label: "Alta" }],
+        alerts: total >= 7 ? ["Soledad subjetiva alta."] : [],
+        dimensions: [makeDimension("Loneliness / detachment", percent(total - 3, 6), `${total}/9`, "Percepcion de aislamiento.")],
+      });
+    }
+    case "minispin": {
+      const total = sumAllNumeric(items, responses);
+      return buildSimpleSumReport({
+        summary: "El Mini-SPIN es un cribado breve de ansiedad social.",
+        total,
+        max: 12,
+        label: "Puntaje total Mini-SPIN",
+        bands: [{ max: 5, label: "No positivo" }, { max: 12, label: "Positivo si >= 6" }],
+        alerts: total >= 6 ? ["Mini-SPIN positivo para ansiedad social clinicamente relevante."] : [],
+        dimensions: [makeDimension("Social anxiety", percent(total, 12), `${total}/12`, "Cribado social breve.")],
+      });
+    }
+    case "rses": {
+      const total = computeRses(accessor);
+      return buildSimpleSumReport({
+        summary: "La RSES estima autoestima global.",
+        total,
+        max: 30,
+        label: "Puntaje total RSES",
+        bands: [{ max: 14, label: "Autoestima baja" }, { max: 25, label: "Rango habitual" }, { max: 30, label: "Alta" }],
+        alerts: total <= 14 ? ["Autoestima baja en la RSES."] : [],
+        dimensions: [makeDimension("Self-esteem", percent(total, 30), `${total}/30`, "A mayor puntaje, mayor autoestima.")],
+      });
+    }
+    case "brs": {
+      const mean = computeBrs(accessor);
+      return {
+        summary: "La BRS estima capacidad percibida de recuperacion tras el estres.",
+        scores: [buildScore("Promedio BRS", mean, 5, bandLabel(mean, [{ max: 2.99, label: "Baja resiliencia" }, { max: 4.3, label: "Rango habitual" }, { max: 5, label: "Alta resiliencia" }]))],
+        alerts: mean < 3 ? ["BRS en rango de resiliencia baja."] : [],
+        dimensions: [makeDimension("Resilience", percent(mean - 1, 4), `${formatNumber(mean)} / 5`, "A mayor promedio, mayor resiliencia percibida.")],
+        tables: [],
+      };
+    }
+    case "dialog11": {
+      const life = meanRange(accessor, 1, 8);
+      const treatment = meanRange(accessor, 9, 11);
+      const total = meanRange(accessor, 1, 11);
+      return {
+        summary: "DIALOG-11 diferencia satisfaccion con vida y con tratamiento.",
+        scores: [
+          buildScore("Promedio global", total, 7, bandLabel(total, [{ max: 2.99, label: "Bajo" }, { max: 4.99, label: "Intermedio" }, { max: 7, label: "Alto" }])),
+          buildScore("Vida", life, 7, ""),
+          buildScore("Tratamiento", treatment, 7, ""),
+        ],
+        alerts: [],
+        dimensions: [
+          makeDimension("Quality of life", percent(total - 1, 6), `${formatNumber(total)} / 7`, "Satisfaccion global."),
+          makeDimension("Treatment satisfaction", percent(treatment - 1, 6), `${formatNumber(treatment)} / 7`, "Satisfaccion con apoyos."),
+        ],
+        tables: [],
+      };
+    }
+    case "lec5": {
+      const anyExposure = items.filter((item) => accessor(item.number) > 0).length;
+      const directExposure = items.filter((item) => {
+        const value = accessor(item.number);
+        return value === 4 || value === 5;
+      }).length;
+      return {
+        summary: "El LEC-5 es un inventario de exposicion, no una escala de severidad sintomatica.",
+        scores: [
+          buildScore("Eventos con alguna exposicion", anyExposure, items.length, ""),
+          buildScore("Exposicion directa / laboral", directExposure, items.length, ""),
+        ],
+        alerts: directExposure >= 1 ? ["Hay al menos un evento con exposicion directa o laboral relevante."] : [],
+        dimensions: [makeDimension("Trauma exposure", percent(anyExposure, items.length), `${anyExposure}/${items.length}`, "Carga de exposicion acumulada.")],
+        tables: [],
+      };
+    }
+    case "thq": {
+      const total = sumAllNumeric(items, responses);
+      const crime = sumRange(accessor, 1, 4);
+      const general = sumRange(accessor, 5, 17);
+      const physical = sumRange(accessor, 18, 24);
+      return {
+        summary: "El THQ cuenta exposicion a experiencias traumaticas a lo largo de la vida.",
+        scores: [
+          buildScore("Exposiciones afirmativas", total, items.length, ""),
+          buildScore("Crimen", crime, 4, ""),
+          buildScore("Desastres / trauma general", general, 13, ""),
+          buildScore("Trauma fisico / sexual", physical, 7, ""),
+        ],
+        alerts: total >= 1 ? ["Hay historia positiva de trauma en el THQ."] : [],
+        dimensions: [makeDimension("Trauma exposure", percent(total, items.length), `${total}/${items.length}`, "Conteo de exposiciones afirmativas.")],
+        tables: [],
+      };
+    }
+    default:
+      return {
+        summary: "Instrumento cargado correctamente, pero su regla de scoring aun no fue conectada.",
+        scores: [],
+        alerts: ["Falta conectar scoring para este instrumento."],
+        dimensions: [],
+        tables: [],
+      };
+  }
+}
+
+function buildPid5Report(items, responses) {
+  const answers = Object.values(responses);
+  const facetResults = PID5_FACETS.map((facet) => {
+    const values = facet.itemNumbers.map((itemNumber) => {
+      const itemId = items[itemNumber - 1]?.id;
+      const answer = responses[itemId];
+      return facet.reversed ? 3 - answer : answer;
+    });
+    const rawScore = meanValues(values);
+    const zScore = (rawScore - facet.normMean) / facet.normSd;
+    return { ...facet, rawScore, zScore };
+  });
+
+  const domains = groupBy(facetResults, "domain").map(([domain, rows]) => ({
+    domain,
+    value: meanValues(rows.map((row) => row.rawScore)),
+  }));
+  const topFacets = [...facetResults].sort((left, right) => right.zScore - left.zScore).slice(0, 5);
+
+  return {
+    summary: "El PID-5 entrega facetas maladaptativas y cinco dominios amplios de personalidad.",
+    scores: domains.map((entry) => buildScore(entry.domain, roundTo(entry.value, 2), 3, "")),
+    alerts: topFacets.length ? [`Facetas mas elevadas: ${topFacets.map((facet) => facet.name).join(", ")}.`] : [],
+    dimensions: domains.map((entry) => makeDimension(entry.domain, percent(entry.value, 3), `${formatNumber(entry.value)} / 3`, "Promedio de facetas del dominio.")),
+    tables: [
+      {
+        title: "Facetas PID-5",
+        columns: ["Dominio", "Faceta", "Puntaje", "Z-score"],
+        rows: facetResults
+          .sort((left, right) => right.zScore - left.zScore)
+          .map((facet) => [facet.domain, facet.name, formatNumber(facet.rawScore), formatSignedNumber(facet.zScore)]),
+      },
+    ],
+  };
+}
+
+function buildSimpleSumReport({ summary, total, max, label, bands, alerts, dimensions }) {
+  return {
+    summary,
+    scores: [buildScore(label, total, max, bandLabel(total, bands))],
+    alerts,
+    dimensions,
+    tables: [],
+  };
+}
+
+function createAccessor(items, responses) {
+  const idByNumber = new Map(items.map((item) => [item.number, item.id]));
+  return (number) => {
+    const stored = responses[idByNumber.get(number)];
+    return typeof stored === "number" ? stored : null;
+  };
+}
+
+function sumRange(accessor, start, end) {
+  let total = 0;
+  for (let number = start; number <= end; number += 1) {
+    total += accessor(number) || 0;
+  }
+  return total;
+}
+
+function meanRange(accessor, start, end) {
+  const values = [];
+  for (let number = start; number <= end; number += 1) {
+    values.push(accessor(number) || 0);
+  }
+  return meanValues(values);
+}
+
+function sumAllNumeric(items, responses) {
+  return items.reduce((total, item) => {
+    const value = responses[item.id];
+    return total + (typeof value === "number" ? value : 0);
+  }, 0);
+}
+
+function countAtLeast(accessor, numbers, threshold) {
+  return numbers.filter((number) => (accessor(number) || 0) >= threshold).length;
+}
+
+function countAsrsPartA(accessor, maxNumber) {
+  const thresholds = {
+    1: 3,
+    2: 3,
+    3: 3,
+    4: 2,
+    5: 2,
+    6: 2,
+  };
+  return Object.entries(thresholds)
+    .filter(([number]) => Number(number) <= maxNumber)
+    .filter(([number, threshold]) => (accessor(Number(number)) || 0) >= threshold)
+    .length;
+}
+
+function countAq10(accessor) {
+  const agreeItems = [1, 7, 8, 10];
+  const disagreeItems = [2, 3, 4, 5, 6, 9];
+  let total = 0;
+  agreeItems.forEach((number) => {
+    const value = accessor(number);
+    if (value !== null && value >= 2) {
+      total += 1;
+    }
+  });
+  disagreeItems.forEach((number) => {
+    const value = accessor(number);
+    if (value !== null && value <= 1) {
+      total += 1;
+    }
+  });
+  return total;
+}
+
+function computePss10(accessor) {
+  const reverseItems = new Set([4, 5, 7, 8]);
+  let total = 0;
+  for (let number = 1; number <= 10; number += 1) {
+    const value = accessor(number) || 0;
+    total += reverseItems.has(number) ? 4 - value : value;
+  }
+  return total;
+}
+
+function computeRses(accessor) {
+  const reverseItems = new Set([3, 5, 8, 9, 10]);
+  let total = 0;
+  for (let number = 1; number <= 10; number += 1) {
+    const value = accessor(number) || 0;
+    total += reverseItems.has(number) ? 3 - value : value;
+  }
+  return total;
+}
+
+function computeBrs(accessor) {
+  const reverseItems = new Set([2, 4, 6]);
+  const values = [];
+  for (let number = 1; number <= 6; number += 1) {
+    const value = accessor(number) || 1;
+    values.push(reverseItems.has(number) ? 6 - value : value);
+  }
+  return roundTo(meanValues(values), 2);
+}
+
+function getObjectPromptValue(value, key) {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  return value[key] ?? null;
+}
+
+function buildScore(label, value, max, band, note = "") {
+  return {
+    label,
+    display: `${formatNumber(value)} / ${formatNumber(max)}`,
+    band,
+    note,
+  };
+}
+
+function makeDimension(label, percentValue, valueLabel, note) {
+  return {
+    label,
+    percent: Math.max(0, Math.min(100, roundTo(percentValue, 0))),
+    valueLabel,
+    note,
+  };
+}
+
+function bandLabel(value, bands) {
+  const match = bands.find((band) => value <= band.max);
+  return match ? match.label : bands[bands.length - 1]?.label || "";
+}
+
+function rawBand(value, bands) {
+  return bandLabel(value, bands);
+}
+
+function percent(value, max) {
+  if (!max) {
+    return 0;
+  }
+  return (value / max) * 100;
+}
+
+function meanValues(values) {
+  const clean = values.filter((value) => typeof value === "number");
+  if (!clean.length) {
+    return 0;
+  }
+  return clean.reduce((sum, value) => sum + value, 0) / clean.length;
+}
+
+function groupBy(rows, key) {
+  const map = new Map();
+  rows.forEach((row) => {
+    const bucket = map.get(row[key]) || [];
+    bucket.push(row);
+    map.set(row[key], bucket);
+  });
+  return Array.from(map.entries());
+}
+
+function roundTo(value, decimals = 2) {
+  const factor = 10 ** decimals;
+  return Math.round(value * factor) / factor;
+}
+
+function formatNumber(value) {
+  return Number(value).toFixed(Number.isInteger(value) ? 0 : 2);
+}
+
+function formatSignedNumber(value) {
+  return `${value >= 0 ? "+" : ""}${formatNumber(value)}`;
+}
+
 async function copyText(text, message) {
   try {
     await navigator.clipboard.writeText(text);
-    state.notice = message;
+    state.copyFeedback = message;
   } catch (error) {
-    state.error = "No pude copiar automaticamente.";
+    state.copyFeedback = "No pude copiar automaticamente.";
   }
   render();
 }
 
-function getSelectedPatient() {
-  return state.patients.find((patient) => patient.id === state.selectedPatientId) || null;
+function buildSummaryText(report) {
+  const scoreLines = report.scores.map((entry) => `${entry.label}: ${entry.display}${entry.band ? ` · ${entry.band}` : ""}`).join("\n");
+  const dimensionLines = report.dimensions.map((entry) => `${entry.label}: ${entry.valueLabel}`).join("\n");
+  return [
+    state.instrument.name,
+    "",
+    "Puntajes",
+    scoreLines,
+    "",
+    "Reporte dimensional",
+    dimensionLines,
+    "",
+    report.alerts.length ? `Alertas: ${report.alerts.join(" | ")}` : "Sin alertas adicionales.",
+  ].join("\n");
 }
 
-function createEmptyPatientDraft() {
-  return {
-    id: "",
-    fullName: "",
-    recordNumber: "",
-    dateOfBirth: "",
-    sex: "",
-    notes: "",
-    createdAt: "",
-    updatedAt: "",
-  };
-}
-
-function renderPatientCard(patient) {
-  return `
-    <article class="patient-card">
-      <div class="patient-card-head">
-        <div class="info-stack">
-          <p class="section-label">${escapeHtml(patient.recordNumber)}</p>
-          <h3>${escapeHtml(patient.fullName)}</h3>
-        </div>
-        <span class="status-chip is-completed">Local</span>
-      </div>
-      <p class="summary-text">${escapeHtml(formatDate(patient.dateOfBirth))} · ${escapeHtml(patient.sex)}</p>
-      <p class="footer-note">${escapeHtml(patient.notes || "Sin observaciones.")}</p>
-      <div class="patient-actions">
-        <button class="primary-button" type="button" data-open-patient="${patient.id}">Abrir</button>
-        <button class="secondary-button" type="button" data-edit-patient="${patient.id}">Editar</button>
-        <button class="danger-button" type="button" data-delete-patient="${patient.id}">Eliminar</button>
-      </div>
-    </article>
-  `;
-}
-
-function renderSessionCard(session) {
-  const primaryScore = session.scores?.[0];
-  const primaryDimension = session.dimensions?.[0];
-  const answeredItems = Object.keys(session.responses || {}).length;
-
-  return `
-    <article class="history-card">
-      <div class="patient-card-head">
-        <div class="info-stack">
-          <p class="section-label">${escapeHtml(formatDateTime(session.updatedAt))}</p>
-          <h3>${escapeHtml(session.instrumentName)}</h3>
-        </div>
-        <span class="status-chip ${session.status === "completed" ? "is-completed" : "is-progress"}">
-          ${session.status === "completed" ? "Completada" : "En curso"}
-        </span>
-      </div>
-      <p class="summary-text">
-        ${
-          primaryScore
-            ? `${escapeHtml(primaryScore.label)} · ${escapeHtml(primaryScore.display)}`
-            : `${answeredItems} respuestas guardadas`
-        }
-      </p>
-      <p class="footer-note">
-        ${primaryDimension ? escapeHtml(`${primaryDimension.label}: ${primaryDimension.valueLabel}`) : "Sin dimension final aun."}
-      </p>
-      <div class="history-actions">
-        <button class="secondary-button" type="button" data-open-session="${session.id}">
-          ${session.status === "completed" ? "Ver reporte" : "Continuar"}
-        </button>
-        <button class="danger-button" type="button" data-delete-session="${session.id}">Eliminar</button>
-      </div>
-    </article>
-  `;
-}
-
-function renderMessageBlock() {
-  if (!state.error && !state.notice) {
-    return "";
+function buildTableText(report, tables = report.tables) {
+  if (!tables.length) {
+    return buildSummaryText(report);
   }
-
-  if (state.error) {
-    return `<div class="soft-panel danger-panel">${escapeHtml(state.error)}</div>`;
-  }
-
-  return `<div class="soft-panel success-panel">${escapeHtml(state.notice)}</div>`;
-}
-
-function renderSexOptions(value) {
-  const options = ["Masculino", "Femenino", "Otro / no especificado"];
-  return [`<option value="">Seleccionar</option>`]
-    .concat(
-      options.map(
-        (option) => `<option value="${escapeHtml(option)}" ${value === option ? "selected" : ""}>${escapeHtml(option)}</option>`
-      )
-    )
-    .join("");
-}
-
-function formatDate(value) {
-  if (!value) {
-    return "Sin fecha";
-  }
-
-  return new Intl.DateTimeFormat("es-PE", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(`${value}T00:00:00`));
-}
-
-function formatDateTime(value) {
-  if (!value) {
-    return "Sin fecha";
-  }
-
-  return new Intl.DateTimeFormat("es-PE", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(new Date(value));
+  return tables
+    .map((table) => [table.columns.join("\t"), ...table.rows.map((row) => row.join("\t"))].join("\n"))
+    .join("\n\n");
 }
 
 function escapeHtml(value) {
@@ -2023,6 +1681,23 @@ function formatCoverage(value) {
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function renderTableHeader(tableIndex, columnIndex, column) {
+  const activeSort = state.tableSorts[tableIndex];
+  const isActive = activeSort?.column === columnIndex;
+  const indicator = isActive ? (activeSort.direction === "desc" ? "↓" : "↑") : "↕";
+  return `
+    <button
+      class="table-sort-button ${isActive ? "is-active" : ""}"
+      type="button"
+      data-sort-table="${tableIndex}"
+      data-sort-column="${columnIndex}"
+    >
+      <span>${escapeHtml(column)}</span>
+      <span class="sort-indicator" aria-hidden="true">${indicator}</span>
+    </button>
+  `;
 }
 
 function toggleTableSort(tableIndex, columnIndex, table) {
